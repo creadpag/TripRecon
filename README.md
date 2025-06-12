@@ -6,7 +6,7 @@
 ## ⚙️ Instalación
 
 ```bash
-git clone https://github.com/tuusuario/triprecon.git
+git clone https://github.com/creadpag/TripRecon.git
 cd triprecon
 pip install -r requirements.txt
 ````
