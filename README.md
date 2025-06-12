@@ -1,5 +1,7 @@
 > 🛡️ **TripRecon** te lleva al siguiente nivel de reconocimiento ofensivo.  
 > 🚀 Automatiza la recopilación de subdominios, registros DNS, fugas, Dorks, APIs y más con ⚡ estilo hacker y reportes HTML visuales.
+> ![image](https://github.com/user-attachments/assets/1f080aaf-8735-43c8-b2a9-6da9e60f8798)
+
 
 ---
 
