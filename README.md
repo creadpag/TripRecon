@@ -92,6 +92,3 @@ Creado con ❤️ por **CreadPag**
 ---
 
 🔥 **TripRecon** – Porque el reconocimiento es el primer paso hacia el control total. 🕶️
-
-```
-
