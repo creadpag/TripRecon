@@ -5,7 +5,7 @@
 
 ¡Excelente\! Me gusta mucho la estructura y el estilo del ejemplo que me has proporcionado. Es mucho más conciso y visual.
 
-Vamos a fusionar lo mejor de tu ejemplo con la información detallada que ya teníamos, asegurándonos de que todo quede claro para el usuario. Un punto importante es que tu ejemplo usa `Recon.py` y el script anterior se llamaba `recon03.py`. Asumo que quieres renombrarlo a `Recon.py`.
+Vamos a fusionar lo mejor de tu ejemplo con la información detallada que ya teníamos, asegurándonos de que todo quede claro para el usuario. Un punto importante es que tu ejemplo usa `Recon.py` y el script anterior se llamaba `recon.py`. Asumo que quieres renombrarlo a `Recon.py`.
 
 Aquí tienes el `README.md` modificado y mejorado, incorporando tus sugerencias:
 
