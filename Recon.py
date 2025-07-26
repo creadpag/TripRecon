@@ -37,7 +37,7 @@ ___________      .__      __________
     """
     console.print(Panel.fit(Text(banner, style="bold green"), 
               title="[blink]TripRecon[/blink]", 
-              subtitle="[blue]by CreadPag[/]",
+              subtitle="[blue]by CreadPag 2.0[/]",
               border_style="blue"))
 
 # Función para manejar los argumentos de la línea de comandos
