@@ -2,13 +2,6 @@
 > 🚀 Automatiza la recopilación de subdominios, registros DNS, fugas, Dorks, APIs y más con ⚡ estilo hacker y reportes HTML visuales.
 > ![image](https://github.com/user-attachments/assets/1f080aaf-8735-43c8-b2a9-6da9e60f8798)
 
-
-¡Excelente\! Me gusta mucho la estructura y el estilo del ejemplo que me has proporcionado. Es mucho más conciso y visual.
-
-Vamos a fusionar lo mejor de tu ejemplo con la información detallada que ya teníamos, asegurándonos de que todo quede claro para el usuario. Un punto importante es que tu ejemplo usa `Recon.py` y el script anterior se llamaba `recon.py`. Asumo que quieres renombrarlo a `Recon.py`.
-
-Aquí tienes el `README.md` modificado y mejorado, incorporando tus sugerencias:
-
 -----
 
 # TripRecon: Herramienta de Reconocimiento y Análisis de Dominios
