@@ -1,0 +1,107 @@
+site:{domain} filetype:pdf
+site:{domain} filetype:doc OR filetype:docx
+site:{domain} filetype:xls OR filetype:xlsx
+site:{domain} filetype:ppt OR filetype:pptx
+site:{domain} filetype:txt
+site:{domain} filetype:log
+site:{domain} filetype:conf
+site:{domain} filetype:bak
+site:{domain} filetype:jpg OR filetype:jpeg OR filetype:png OR filetype:gif
+site:{domain} filetype:xml
+site:{domain} filetype:csv
+site:{domain} filetype:zip
+site:{domain} filetype:rar
+site:{domain} filetype:sql
+site:{domain} filetype:php OR filetype:asp OR filetype:aspx OR filetype:js
+site:{domain} intitle:"index of"
+site:{domain} inurl:/uploads/
+site:{domain} filetype:ini
+site:{domain} filetype:pem OR filetype:cer OR filetype:crt
+site:{domain} filetype:ova OR filetype:ovf
+site:{domain} filetype:vsd OR filetype:vsdx
+site:{domain} filetype:java OR filetype:py OR filetype:cpp
+site:{domain} filetype:cfg OR filetype:config
+site:{domain} filetype:md OR filetype:rst
+site:{domain} filetype:psd OR filetype:ai
+site:{domain} -www -shop -share -ir -mfa
+site:{domain} ext:php inurl:?
+site:{domain} inurl:api | site:*/rest | site:*/v1 | site:*/v2 | site:*/v3
+site:{domain} ext:log | ext:txt | ext:conf | ext:cnf | ext:ini | ext:env | ext:sh | ext:bak | ext:backup | ext:swp | ext:old | ext:~ | ext:git | ext:svn | ext:htpasswd | ext:htaccess | ext:json
+inurl:conf | inurl:env | inurl:cgi | inurl:bin | inurl:etc | inurl:root | inurl:sql | inurl:backup | inurl:admin | inurl:php site:{domain}
+inurl:"error" | intitle:"exception" | intitle:"failure" | intitle:"server at" | inurl:exception | "database error" | "SQL syntax" | "undefined index" | "unhandled exception" | "stack trace" site:{domain}
+inurl:q= | inurl:s= | inurl:search= | inurl:query= | inurl:keyword= | inurl:lang= inurl:& site:{domain}
+inurl:url= | inurl:return= | inurl:next= | inurl:redirect= | inurl:redir= | inurl:r2= | inurl:page= inurl:& inurl:http site:{domain}
+inurl:id= | inurl:pid= | inurl:category= | inurl:cat= | inurl:action= | inurl:sid= | inurl:dir= inurl:& site:{domain}
+inurl:http | inurl:url= | inurl:path= | inurl:dest= | inurl:html= | inurl:data= | inurl:domain= | inurl:page= inurl:& site:{domain}
+inurl:include | inurl:dir | inurl:detail= | inurl:file= | inurl:folder= | inurl:inc= | inurl:locate= | inurl:doc= | inurl:conf= inurl:& site:{domain}
+inurl:cmd | inurl:exec= | inurl:query= | inurl:code= | inurl:do= | inurl:run= | inurl:read= | inurl:ping= inurl:& site:{domain}
+site:{domain} "choose file"
+inurl:apidocs | inurl:api-docs | inurl:swagger | inurl:api-explorer site:{domain}
+inurl:login | inurl:signin | intitle:login | intitle:signin | inurl:secure site:{domain}
+inurl:test | inurl:env | inurl:dev | inurl:staging | inurl:sandbox | inurl:debug | inurl:temp | inurl:internal | inurl:demo site:{domain}
+site:{domain} ext:txt | ext:pdf | ext:xml | ext:xls | ext:xlsx | ext:ppt | ext:pptx | ext:doc | ext:docx
+site:{domain} intext:"confidential" | intext:"Not for Public Release" | intext:"internal use only" | intext:"do not distribute"
+inurl:email= | inurl:phone= | inurl:password= | inurl:secret= inurl:& site:{domain}
+inurl:/content/usergenerated | inurl:/content/dam | inurl:/jcr:content | inurl:/libs/granite | inurl:/etc/clientlibs | inurl:/content/geometrixx | inurl:/bin/wcm | inurl:/crx/de site:{domain}
+site:openbugbounty.org inurl:reports intext:"{domain}"
+site:groups.google.com "{domain}"
+site:pastebin.com "{domain}"
+site:jsfiddle.net "{domain}"
+site:codebeautify.org "{domain}"
+site:codepen.io "{domain}"
+site:s3.amazonaws.com "{domain}"
+site:blob.core.windows.net "{domain}"
+site:googleapis.com "{domain}"
+site:drive.google.com "{domain}"
+site:dev.azure.com "{domain}"
+site:onedrive.live.com "{domain}"
+site:digitaloceanspaces.com "{domain}"
+site:sharepoint.com "{domain}"
+site:s3-external-1.amazonaws.com "{domain}"
+site:s3.dualstack.us-east-1.amazonaws.com "{domain}"
+site:dropbox.com/s "{domain}"
+site:box.com/s "{domain}"
+site:docs.google.com inurl:"/d/" "{domain}"
+site:jfrog.io "{domain}"
+site:firebaseio.com "{domain}"
+site:{domain} inurl:/wp-admin/admin-ajax.php
+site:{domain} intext:"Powered by" & intext:Drupal & inurl:user
+site:{domain} inurl:/joomla/login
+site:{domain} inurl:/security.txt "bounty"
+site:{domain} inurl:/server-status apache
+site:*.{domain}
+site:{domain} ("Index of /" | "Índice de /")
+site:{domain} ext:log | ext:txt | ext:conf | ext:cnf | ext:ini | ext:env | ext:sh | ext:bak | ext:backup | ext:swp | ext:old | ext:~ | ext:sql | ext:git | ext:svn | ext:htpasswd | ext:htaccess | ext:json | ext:yaml | ext:yml
+inurl:conf | inurl:env | inurl:cgi | inurl:bin | inurl:etc | inurl:root | inurl:sql | inurl:backup | inurl:admin | inurl:php site:{domain}
+inurl:"error" | intitle:"exception" | intitle:"failure" | intitle:"server at" | inurl:exception | "database error" | "SQL syntax" | "undefined index" | "unhandled exception" | "stack trace" site:{domain}
+site:{domain} inurl:login | inurl:signin | intitle:login | intitle:"iniciar sesión"
+inurl:test | inurl:dev | inurl:staging | inurl:sandbox | inurl:debug | inurl:internal | inurl:demo | inurl:beta | inurl:preprod site:{domain}
+site:{domain} "Seleccionar archivo"
+site:{domain} ext:txt | ext:pdf | ext:xml | ext:xls | ext:xlsx | ext:doc | ext:docx | ext:ppt | ext:pptx | ext:csv intext:"confidencial" | intext:"uso interno" | intext:"no distribuir"
+inurl:password | inurl:secret | inurl:key | inurl:token site:{domain}
+site:{domain} intitle:"phpinfo()" "PHP Version"
+site:pastebin.com "{domain}"
+site:s3.amazonaws.com "{domain}"
+site:blob.core.windows.net "{domain}"
+site:googleapis.com "{domain}"
+site:drive.google.com "{domain}"
+site:sharepoint.com "{domain}"
+site:dropbox.com/s "{domain}"
+site:box.com/s "{domain}"
+# Los siguientes dorks son específicos para archivos con información sensible PERO limitados al dominio
+site:{domain} filetype:env "DB_PASSWORD"
+site:{domain} filetype:env "AWS_SECRET_ACCESS_KEY"
+site:{domain} filetype:log "password"
+site:{domain} filetype:sql "password"
+site:{domain} filetype:json "api_key"
+site:{domain} filetype:bak "password"
+site:{domain} filetype:env "SECRET_KEY"
+site:{domain} filetype:env "API_KEY"
+site:{domain} filetype:env "DATABASE_URL"
+site:{domain} filetype:env "PASSWORD"
+site:{domain} filetype:env "TOKEN"
+site:{domain} filetype:yml "password"
+site:{domain} filetype:yaml "password"
+site:{domain} filetype:config "password"
+site:{domain} filetype:properties "password"
+
