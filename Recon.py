@@ -9,6 +9,7 @@ import urllib3
 import subprocess
 import base64
 import time
+import random
 from datetime import datetime
 from jinja2 import Template
 from rich.console import Console
@@ -49,7 +50,41 @@ def parse_args():
     group.add_argument("-d", "--domain", type=str, help="Dominio único a analizar")
     group.add_argument("-l", "--list", type=str, help="Ruta a un archivo con una lista de dominios (uno por línea)")
     
+    # Nuevo argumento para el archivo de dorks
+    parser.add_argument("--dork", type=str, help="Ruta a un archivo con dorks de Google/Bing (uno por línea)")
+    
+    # Nuevas opciones para motores de búsqueda
+    parser.add_argument("--sinapigoogle", action="store_true", help="Forzar el uso de scraping en lugar de la API de Google para los dorks")
+    parser.add_argument("--usebing", action="store_true", help="Usar Bing en lugar de Google para los dorks")
+    parser.add_argument("--sinapibing", action="store_true", help="Forzar el uso de scraping en lugar de la API de Bing")
+    
+    # Nuevas opciones para funcionalidades adicionales
+    parser.add_argument("--scan-ports", action="store_true", help="Realizar escaneo básico de puertos")
+    parser.add_argument("--analyze-headers", action="store_true", help="Analizar headers de seguridad HTTP")
+    parser.add_argument("--detect-tech", action="store_true", help="Detectar tecnologías del stack tecnológico")
+    
     return parser.parse_args()
+
+# Función para leer dorks desde archivo
+def read_dorks_from_file(dork_file_path):
+    """
+    Lee dorks desde un archivo de texto (uno por línea)
+    """
+    dorks = []
+    try:
+        with open(dork_file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                dork = line.strip()
+                if dork and not dork.startswith('#'):  # Ignorar líneas vacías y comentarios
+                    dorks.append(dork)
+        console.print(f"[bold green]Se cargaron {len(dorks)} dorks desde {dork_file_path}[/bold green]")
+        return dorks
+    except FileNotFoundError:
+        console.print(f"[bold red]Error: El archivo de dorks '{dork_file_path}' no fue encontrado.[/bold red]")
+        return []
+    except Exception as e:
+        console.print(f"[bold red]Error al leer el archivo de dorks:[/bold red] {e}")
+        return []
 
 # Función para obtener la IP de un dominio
 def get_ip_from_domain(domain):
@@ -316,231 +351,379 @@ def get_netlas_info(api_key, domain):
         return {"error": f"Error al consultar Netlas: {e}"}
 
 # Función para obtener resultados de Google Dorks usando la API de Google
-def get_google_dorks_api(domain, google_api_key, google_cse_id):
+def get_google_dorks_api(domain, google_api_key, google_cse_id, dorks_list):
     if not google_api_key or not google_cse_id:
         console.print("[bold red]Advertencia: No se han proporcionado las API Keys de Google CSE. Se omitirá la búsqueda de Google Dorks con API.[/bold red]")
         return {"error": "API Keys de Google CSE no proporcionadas"}
 
-    dorks = [
-        f"site:{domain} filetype:pdf",
-        f"site:{domain} filetype:doc OR filetype:docx",
-        f"site:{domain} filetype:xls OR filetype:xlsx",
-        f"site:{domain} filetype:ppt OR filetype:pptx",
-        f"site:{domain} filetype:txt",
-        f"site:{domain} filetype:log",
-        f"site:{domain} filetype:conf",
-        f"site:{domain} filetype:bak",
-        f"site:{domain} filetype:jpg OR filetype:jpeg OR filetype:png OR filetype:gif",
-        f"site:{domain} filetype:xml",
-        f"site:{domain} filetype:csv",
-        f"site:{domain} filetype:zip",
-        f"site:{domain} filetype:rar",
-        f"site:{domain} filetype:sql",
-        f"site:{domain} filetype:php OR filetype:asp OR filetype:aspx OR filetype:js",
-        f"site:{domain} intitle:'index of'",
-        f"site:{domain} inurl:/uploads/",
-        f"site:{domain} filetype:ini",
-        f"site:{domain} filetype:pem OR filetype:cer OR filetype:crt",
-        f"site:{domain} filetype:ova OR filetype:ovf",
-        f"site:{domain} filetype:vsd OR filetype:vsdx",
-        f"site:{domain} filetype:java OR filetype:py OR filetype:cpp",
-        f"site:{domain} filetype:cfg OR filetype:config",
-        f"site:{domain} filetype:md OR filetype:rst",
-        f"site:{domain} filetype:psd OR filetype:ai",
-        f"site:{domain} -www -shop -share -ir -mfa",
-        f"site:{domain} ext:php inurl:?",
-        f"site:{domain} inurl:api | site:*/rest | site:*/v1 | site:*/v2 | site:*/v3",
-        f'site:"{domain}" ext:log | ext:txt | ext:conf | ext:cnf | ext:ini | ext:env | ext:sh | ext:bak | ext:backup | ext:swp | ext:old | ext:~ | ext:git | ext:svn | ext:htpasswd | ext:htaccess | ext:json',
-        f"inurl:conf | inurl:env | inurl:cgi | inurl:bin | inurl:etc | inurl:root | inurl:sql | inurl:backup | inurl:admin | inurl:php site:{domain}",
-        f'inurl:"error" | intitle:"exception" | intitle:"failure" | intitle:"server at" | inurl:exception | "database error" | "SQL syntax" | "undefined index" | "unhandled exception" | "stack trace" site:{domain}',
-        f"inurl:q= | inurl:s= | inurl:search= | inurl:query= | inurl:keyword= | inurl:lang= inurl:& site:{domain}",
-        f"inurl:url= | inurl:return= | inurl:next= | inurl:redirect= | inurl:redir= | inurl:r2= | inurl:page= inurl:& inurl:http site:{domain}",
-        f"inurl:id= | inurl:pid= | inurl:category= | inurl:cat= | inurl:action= | inurl:sid= | inurl:dir= inurl:& site:{domain}",
-        f"inurl:http | inurl:url= | inurl:path= | inurl:dest= | inurl:html= | inurl:data= | inurl:domain=  | inurl:page= inurl:& site:{domain}",
-        f"inurl:include | inurl:dir | inurl:detail= | inurl:file= | inurl:folder= | inurl:inc= | inurl:locate= | inurl:doc= | inurl:conf= inurl:& site:{domain}",
-        f"inurl:cmd | inurl:exec= | inurl:query= | inurl:code= | inurl:do= | inurl:run= | inurl:read=  | inurl:ping= inurl:& site:{domain}",
-        f'site:{domain} "choose file"',
-        f'inurl:apidocs | inurl:api-docs | inurl:swagger | inurl:api-explorer site:"{domain}"',
-        f"inurl:login | inurl:signin | intitle:login | intitle:signin | inurl:secure site:{domain}",
-        f"inurl:test | inurl:env | inurl:dev | inurl:staging | inurl:sandbox | inurl:debug | inurl:temp | inurl:internal | inurl:demo site:{domain}",
-        f"site:{domain} ext:txt | ext:pdf | ext:xml | ext:xls | ext:xlsx | ext:ppt | ext:pptx | ext:doc | ext:docx",
-        f'site:{domain} intext:"confidential" | intext:"Not for Public Release" | intext:"internal use only" | intext:"do not distribute"',
-        f"inurl:email= | inurl:phone= | inurl:password= | inurl:secret= inurl:& site:{domain}",
-        f"inurl:/content/usergenerated | inurl:/content/dam | inurl:/jcr:content | inurl:/libs/granite | inurl:/etc/clientlibs | inurl:/content/geometrixx | inurl:/bin/wcm | inurl:/crx/de site:{domain}",
-        f'site:openbugbounty.org inurl:reports intext:"{domain}"',
-        f'site:groups.google.com "{domain}"',
-        f'site:pastebin.com "{domain}"',
-        f'site:jsfiddle.net "{domain}"',
-        f'site:codebeautify.org "{domain}"',
-        f'site:codepen.io "{domain}"',
-        f'site:s3.amazonaws.com "{domain}"',
-        f'site:blob.core.windows.net "{domain}"',
-        f'site:googleapis.com "{domain}"',
-        f'site:drive.google.com "{domain}"',
-        f'site:dev.azure.com "{domain}"',
-        f'site:onedrive.live.com "{domain}"',
-        f'site:digitaloceanspaces.com "{domain}"',
-        f'site:sharepoint.com "{domain}"',
-        f'site:s3-external-1.amazonaws.com "{domain}"',
-        f'site:s3.dualstack.us-east-1.amazonaws.com "{domain}"',
-        f'site:dropbox.com/s "{domain}"',
-        f'site:box.com/s "{domain}"',
-        f'site:docs.google.com inurl:"/d/" "{domain}"',
-        f'site:jfrog.io "{domain}"',
-        f'site:firebaseio.com "{domain}"',
-        f'site:{domain} inurl:/wp-admin/admin-ajax.php',
-        f'site:{domain} intext:"Powered by" & intext:Drupal & inurl:user',
-        f'site:{domain} inurl:/joomla/login',
-        f'site:{domain} inurl:/security.txt "bounty"',
-        f'site:{domain} inurl:/server-status apache',
-    ]
-    
+    # Usar la lista de dorks proporcionada en lugar de los hardcodeados
     results = {}
-    for dork in dorks:
+    for dork in dorks_list:
         try:
+            # Reemplazar el marcador de posición {domain} con el dominio real
+            formatted_dork = dork.replace("{domain}", domain)
+            
             url = "https://www.googleapis.com/customsearch/v1"
             params = {
-                "q": dork,
+                "q": formatted_dork,
                 "key": google_api_key,
                 "cx": google_cse_id,
                 "num": 10
             }
-            console.print(f"[bold green]Buscando con dork (API de Google) para {domain}:[/bold green] {dork}")
+            console.print(f"[bold green]Buscando con dork (API de Google) para {domain}:[/bold green] {formatted_dork}")
             response = requests.get(url, params=params)
             data = response.json()
             search_results = [item.get("link") for item in data.get("items", [])]
             cleaned_results = list(set(search_results))
             cleaned_results = [url for url in cleaned_results if url and url.startswith("http")]
-            results[dork] = cleaned_results
+            results[formatted_dork] = cleaned_results
             
             time.sleep(1) 
         except Exception as e:
-            results[dork] = f"Error al buscar con el dork '{dork}': {e}"
-            console.print(f"[bold red]Error al usar Google API para el dork '{dork}' para {domain}:[/bold red] {e}")
+            results[formatted_dork] = f"Error al buscar con el dork '{formatted_dork}': {e}"
+            console.print(f"[bold red]Error al usar Google API para el dork '{formatted_dork}' para {domain}:[/bold red] {e}")
     return results
 
 # Función para obtener resultados de Google Dorks mediante web scraping (SIN API)
-def get_google_dorks_scraper(domain):
-    dorks = [
-        f"site:{domain} filetype:pdf",
-        f"site:{domain} filetype:doc OR filetype:docx",
-        f"site:{domain} filetype:xls OR filetype:xlsx",
-        f"site:{domain} filetype:ppt OR filetype:pptx",
-        f"site:{domain} filetype:txt",
-        f"site:{domain} filetype:log",
-        f"site:{domain} filetype:conf",
-        f"site:{domain} filetype:bak",
-        f"site:{domain} filetype:jpg OR filetype:jpeg OR filetype:png OR filetype:gif",
-        f"site:{domain} filetype:xml",
-        f"site:{domain} filetype:csv",
-        f"site:{domain} filetype:zip",
-        f"site:{domain} filetype:rar",
-        f"site:{domain} filetype:sql",
-        f"site:{domain} filetype:php OR filetype:asp OR filetype:aspx OR filetype:js",
-        f"site:{domain} intitle:'index of'",
-        f"site:{domain} inurl:/uploads/",
-        f"site:{domain} filetype:ini",
-        f"site:{domain} filetype:pem OR filetype:cer OR filetype:crt",
-        f"site:{domain} filetype:ova OR filetype:ovf",
-        f"site:{domain} filetype:vsd OR filetype:vsdx",
-        f"site:{domain} filetype:java OR filetype:py OR filetype:cpp",
-        f"site:{domain} filetype:cfg OR filetype:config",
-        f"site:{domain} filetype:md OR filetype:rst",
-        f"site:{domain} filetype:psd OR filetype:ai",
-        f"site:{domain} -www -shop -share -ir -mfa",
-        f"site:{domain} ext:php inurl:?",
-        f"site:{domain} inurl:api | site:*/rest | site:*/v1 | site:*/v2 | site:*/v3",
-        f'site:"{domain}" ext:log | ext:txt | ext:conf | ext:cnf | ext:ini | ext:env | ext:sh | ext:bak | ext:backup | ext:swp | ext:old | ext:~ | ext:git | ext:svn | ext:htpasswd | ext:htaccess | ext:json',
-        f"inurl:conf | inurl:env | inurl:cgi | inurl:bin | inurl:etc | inurl:root | inurl:sql | inurl:backup | inurl:admin | inurl:php site:{domain}",
-        f'inurl:"error" | intitle:"exception" | intitle:"failure" | intitle:"server at" | inurl:exception | "database error" | "SQL syntax" | "undefined index" | "unhandled exception" | "stack trace" site:{domain}',
-        f"inurl:q= | inurl:s= | inurl:search= | inurl:query= | inurl:keyword= | inurl:lang= inurl:& site:{domain}",
-        f"inurl:url= | inurl:return= | inurl:next= | inurl:redirect= | inurl:redir= | inurl:r2= | inurl:page= inurl:& inurl:http site:{domain}",
-        f"inurl:id= | inurl:pid= | inurl:category= | inurl:cat= | inurl:action= | inurl:sid= | inurl:dir= inurl:& site:{domain}",
-        f"inurl:http | inurl:url= | inurl:path= | inurl:dest= | inurl:html= | inurl:data= | inurl:domain=  | inurl:page= inurl:& site:{domain}",
-        f"inurl:include | inurl:dir | inurl:detail= | inurl:file= | inurl:folder= | inurl:inc= | inurl:locate= | inurl:doc= | inurl:conf= inurl:& site:{domain}",
-        f"inurl:cmd | inurl:exec= | inurl:query= | inurl:code= | inurl:do= | inurl:run= | inurl:read=  | inurl:ping= inurl:& site:{domain}",
-        f'site:{domain} "choose file"',
-        f'inurl:apidocs | inurl:api-docs | inurl:swagger | inurl:api-explorer site:"{domain}"',
-        f"inurl:login | inurl:signin | intitle:login | intitle:signin | inurl:secure site:{domain}",
-        f"inurl:test | inurl:env | inurl:dev | inurl:staging | inurl:sandbox | inurl:debug | inurl:temp | inurl:internal | inurl:demo site:{domain}",
-        f"site:{domain} ext:txt | ext:pdf | ext:xml | ext:xls | ext:xlsx | ext:ppt | ext:pptx | ext:doc | ext:docx",
-        f'site:{domain} intext:"confidential" | intext:"Not for Public Release" | intext:"internal use only" | intext:"do not distribute"',
-        f"inurl:email= | inurl:phone= | inurl:password= | inurl:secret= inurl:& site:{domain}",
-        f"inurl:/content/usergenerated | inurl:/content/dam | inurl:/jcr:content | inurl:/libs/granite | inurl:/etc/clientlibs | inurl:/content/geometrixx | inurl:/bin/wcm | inurl:/crx/de site:{domain}",
-        f'site:openbugbounty.org inurl:reports intext:"{domain}"',
-        f'site:groups.google.com "{domain}"',
-        f'site:pastebin.com "{domain}"',
-        f'site:jsfiddle.net "{domain}"',
-        f'site:codebeautify.org "{domain}"',
-        f'site:codepen.io "{domain}"',
-        f'site:s3.amazonaws.com "{domain}"',
-        f'site:blob.core.windows.net "{domain}"',
-        f'site:googleapis.com "{domain}"',
-        f'site:drive.google.com "{domain}"',
-        f'site:dev.azure.com "{domain}"',
-        f'site:onedrive.live.com "{domain}"',
-        f'site:digitaloceanspaces.com "{domain}"',
-        f'site:sharepoint.com "{domain}"',
-        f'site:s3-external-1.amazonaws.com "{domain}"',
-        f'site:s3.dualstack.us-east-1.amazonaws.com "{domain}"',
-        f'site:dropbox.com/s "{domain}"',
-        f'site:box.com/s "{domain}"',
-        f'site:docs.google.com inurl:"/d/" "{domain}"',
-        f'site:jfrog.io "{domain}"',
-        f'site:firebaseio.com "{domain}"',
-        f'site:{domain} inurl:/wp-admin/admin-ajax.php',
-        f'site:{domain} intext:"Powered by" & intext:Drupal & inurl:user',
-        f'site:{domain} inurl:/joomla/login',
-        f'site:{domain} inurl:/security.txt "bounty"',
-        f'site:{domain} inurl:/server-status apache',
-    ]
-
+def get_google_dorks_scraper(domain, dorks_list):
     results = {}
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0"
     }
 
-    for dork in dorks:
+    for dork in dorks_list:
         try:
-            encoded_dork = requests.utils.quote(dork)
-            url = f"https://www.google.com/search?q={encoded_dork}"
+            # Reemplazar el marcador de posición {domain} con el dominio real
+            formatted_dork = dork.replace("{domain}", domain)
+            encoded_dork = requests.utils.quote(formatted_dork)
+            url = f"https://www.google.com/search?q={encoded_dork}&num=20"
             
-            console.print(f"[bold yellow]Buscando con dork (sin API) para {domain}:[/bold yellow] {dork}")
-            response = requests.get(url, headers=headers, timeout=15)
+            console.print(f"[bold yellow]Buscando con dork (sin API) para {domain}:[/bold yellow] {formatted_dork}")
+            
+            # Añadir delays aleatorios para evitar bloqueos
+            time.sleep(random.uniform(2, 5))
+            
+            response = requests.get(url, headers=headers, timeout=20)
+            
+            # Verificar si Google está bloqueando las solicitudes
+            if "detected unusual traffic" in response.text.lower():
+                console.print("[bold red]Google ha detectado tráfico inusual. Considera usar proxies o esperar un tiempo.[/bold red]")
+                results[formatted_dork] = "Error: Google ha bloqueado la solicitud por tráfico inusual"
+                continue
+                
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, 'html.parser')
             
             links = []
+            # Buscar enlaces en los resultados de búsqueda
             for g in soup.find_all('div', class_='g'):
                 a_tag = g.find('a')
                 if a_tag and 'href' in a_tag.attrs:
                     link = a_tag['href']
-                    if link and link.startswith("http") and domain in link:
-                        links.append(link)
+                    # Filtrar enlaces de Google y mantener solo los resultados reales
+                    if link.startswith('/url?q='):
+                        link = link[7:]
+                        # Eliminar parámetros adicionales de Google
+                        if '&' in link:
+                            link = link.split('&')[0]
+                        if link.startswith("http") and domain in link:
+                            links.append(link)
             
             cleaned_results = list(set(links))
-            results[dork] = cleaned_results
+            results[formatted_dork] = cleaned_results
             
-            time.sleep(2) 
+            # Mostrar resultados encontrados
+            if cleaned_results:
+                console.print(f"[green]Encontrados {len(cleaned_results)} resultados[/green]")
+            else:
+                console.print("[yellow]No se encontraron resultados[/yellow]")
 
         except requests.exceptions.HTTPError as err:
-            console.print(f"[bold red]Error HTTP al buscar con el dork '{dork}' para {domain}:[/bold red] {err}")
-            if "429" in str(err) or "503" in str(err):
-                console.print("[bold red]Posiblemente bloqueado por Google. Intenta más tarde o con un proxy.[/bold red]")
-            results[dork] = f"Error HTTP: {err}"
+            console.print(f"[bold red]Error HTTP al buscar con el dork '{formatted_dork}' para {domain}:[/bold red] {err}")
+            if response.status_code == 429:
+                console.print("[bold red]Demasiadas solicitudes (429). Google te está bloqueando temporalmente.[/bold red]")
+            results[formatted_dork] = f"Error HTTP {response.status_code}: {err}"
         except requests.exceptions.ConnectionError as err:
-            console.print(f"[bold red]Error de conexión al buscar con el dork '{dork}' para {domain}:[/bold red] {err}")
-            results[dork] = f"Error de conexión: {err}"
+            console.print(f"[bold red]Error de conexión al buscar con el dork '{formatted_dork}' para {domain}:[/bold red] {err}")
+            results[formatted_dork] = f"Error de conexión: {err}"
         except requests.exceptions.Timeout:
-            console.print(f"[bold red]Tiempo de espera agotado al buscar con el dork '{dork}' para {domain}.[/bold red]")
-            results[dork] = f"Tiempo de espera agotado."
+            console.print(f"[bold red]Tiempo de espera agotado al buscar con el dork '{formatted_dork}' para {domain}.[/bold red]")
+            results[formatted_dork] = f"Tiempo de espera agotado."
         except Exception as e:
-            results[dork] = f"Error al buscar con el dork '{dork}': {e}"
-            console.print(f"[bold red]Error desconocido al buscar con el dork '{dork}' para {domain}:[/bold red] {e}")
+            results[formatted_dork] = f"Error al buscar con el dork '{formatted_dork}': {e}"
+            console.print(f"[bold red]Error desconocido al buscar con el dork '{formatted_dork}' para {domain}:[/bold red] {e}")
             
     return results
 
+# Función para obtener resultados de Bing Dorks usando la API de Bing
+def get_bing_dorks_api(domain, bing_api_key, dorks_list):
+    if not bing_api_key:
+        console.print("[bold red]Advertencia: No se ha proporcionado la API Key de Bing. Se omitirá la búsqueda de Bing Dorks con API.[/bold red]")
+        return {"error": "API Key de Bing no proporcionada"}
+
+    results = {}
+    headers = {
+        "Ocp-Apim-Subscription-Key": bing_api_key
+    }
+    
+    for dork in dorks_list:
+        try:
+            formatted_dork = dork.replace("{domain}", domain)
+            url = "https://api.bing.microsoft.com/v7.0/search"
+            params = {
+                "q": formatted_dork,
+                "count": 10,
+                "textDecorations": False,
+                "textFormat": "HTML"
+            }
+            
+            console.print(f"[bold cyan]Buscando con Bing API para {domain}:[/bold cyan] {formatted_dork}")
+            response = requests.get(url, headers=headers, params=params)
+            data = response.json()
+            
+            if response.status_code == 200:
+                search_results = [item["url"] for item in data.get("webPages", {}).get("value", [])]
+                cleaned_results = list(set(search_results))
+                results[formatted_dork] = cleaned_results
+            else:
+                results[formatted_dork] = f"Error de Bing API: {data.get('error', {}).get('message', 'Error desconocido')}"
+                console.print(f"[bold red]Error en Bing API:[/bold red] {data.get('error', {}).get('message', 'Error desconocido')}")
+            
+            time.sleep(1)  # Rate limiting
+            
+        except Exception as e:
+            results[formatted_dork] = f"Error al buscar con Bing API: {e}"
+            console.print(f"[bold red]Error al usar Bing API para el dork '{formatted_dork}':[/bold red] {e}")
+    
+    return results
+
+# Función para obtener resultados de Bing Dorks mediante web scraping (SIN API)
+def get_bing_dorks_scraper(domain, dorks_list):
+    results = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.8,en-US;q=0.5,en;q=0.3",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
+    for dork in dorks_list:
+        try:
+            formatted_dork = dork.replace("{domain}", domain)
+            encoded_dork = requests.utils.quote(formatted_dork)
+            url = f"https://www.bing.com/search?q={encoded_dork}&count=20"
+            
+            console.print(f"[bold cyan]Buscando con Bing (sin API) para {domain}:[/bold cyan] {formatted_dork}")
+            
+            # Añadir delays aleatorios para evitar bloqueos
+            time.sleep(random.uniform(2, 5))
+            
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            links = []
+            # Buscar enlaces en los resultados de Bing
+            for result in soup.find_all('li', class_='b_algo'):
+                a_tag = result.find('a')
+                if a_tag and 'href' in a_tag.attrs:
+                    link = a_tag['href']
+                    if link.startswith("http") and domain in link:
+                        links.append(link)
+            
+            cleaned_results = list(set(links))
+            results[formatted_dork] = cleaned_results
+            
+            # Mostrar resultados encontrados
+            if cleaned_results:
+                console.print(f"[green]Encontrados {len(cleaned_results)} resultados en Bing[/green]")
+            else:
+                console.print("[yellow]No se encontraron resultados en Bing[/yellow]")
+
+        except requests.exceptions.HTTPError as err:
+            console.print(f"[bold red]Error HTTP al buscar en Bing con el dork '{formatted_dork}':[/bold red] {err}")
+            results[formatted_dork] = f"Error HTTP {response.status_code}: {err}"
+        except requests.exceptions.ConnectionError as err:
+            console.print(f"[bold red]Error de conexión al buscar en Bing con el dork '{formatted_dork}':[/bold red] {err}")
+            results[formatted_dork] = f"Error de conexión: {err}"
+        except requests.exceptions.Timeout:
+            console.print(f"[bold red]Tiempo de espera agotado al buscar en Bing con el dork '{formatted_dork}'.[/bold red]")
+            results[formatted_dork] = f"Tiempo de espera agotado."
+        except Exception as e:
+            results[formatted_dork] = f"Error al buscar en Bing: {e}"
+            console.print(f"[bold red]Error desconocido al buscar en Bing con el dork '{formatted_dork}':[/bold red] {e}")
+            
+    return results
+
+# Función para analizar headers de seguridad HTTP
+def analyze_security_headers(domain):
+    try:
+        console.print(f"[bold blue]Analizando headers de seguridad para {domain}...[/bold blue]")
+        
+        # Probar con HTTPS primero, luego HTTP
+        protocols = ['https', 'http']
+        headers_analysis = {}
+        
+        for protocol in protocols:
+            try:
+                url = f"{protocol}://{domain}"
+                response = requests.get(url, timeout=10, verify=False, allow_redirects=True)
+                
+                security_headers = {
+                    'Strict-Transport-Security': response.headers.get('Strict-Transport-Security', 'No presente'),
+                    'Content-Security-Policy': response.headers.get('Content-Security-Policy', 'No presente'),
+                    'X-Frame-Options': response.headers.get('X-Frame-Options', 'No presente'),
+                    'X-Content-Type-Options': response.headers.get('X-Content-Type-Options', 'No presente'),
+                    'X-XSS-Protection': response.headers.get('X-XSS-Protection', 'No presente'),
+                    'Referrer-Policy': response.headers.get('Referrer-Policy', 'No presente'),
+                    'Permissions-Policy': response.headers.get('Permissions-Policy', 'No presente'),
+                    'Server': response.headers.get('Server', 'No identificado')
+                }
+                
+                headers_analysis[protocol] = security_headers
+                
+            except requests.exceptions.RequestException:
+                continue
+        
+        # Mostrar resultados en tabla
+        if headers_analysis:
+            for protocol, headers in headers_analysis.items():
+                table = Table(title=f"Headers de Seguridad - {protocol.upper()}://{domain}", show_header=True, header_style="bold blue")
+                table.add_column("Header")
+                table.add_column("Valor")
+                table.add_column("Estado")
+                
+                for header, value in headers.items():
+                    status = "✅" if value != "No presente" else "❌"
+                    table.add_row(header, value, status)
+                
+                console.print(table)
+        
+        return headers_analysis
+        
+    except Exception as e:
+        console.print(f"[bold red]Error al analizar headers de seguridad:[/bold red] {e}")
+        return {"error": f"Error al analizar headers: {e}"}
+
+# Función para detectar tecnologías del stack tecnológico
+def detect_technologies(domain):
+    try:
+        console.print(f"[bold blue]Detectando tecnologías para {domain}...[/bold blue]")
+        
+        url = f"https://{domain}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
+        technologies = {
+            "webserver": [],
+            "programming_language": [],
+            "javascript_frameworks": [],
+            "analytics": [],
+            "cms": []
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=10, verify=False)
+            
+            # Detectar servidor web
+            server_header = response.headers.get('Server', '').lower()
+            if 'apache' in server_header:
+                technologies["webserver"].append("Apache")
+            elif 'nginx' in server_header:
+                technologies["webserver"].append("Nginx")
+            elif 'iis' in server_header:
+                technologies["webserver"].append("IIS")
+            
+            # Detectar tecnologías en el contenido HTML
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Detectar WordPress
+            if 'wp-content' in response.text or 'wordpress' in response.text.lower():
+                technologies["cms"].append("WordPress")
+            
+            # Detectar React
+            script_tags = soup.find_all('script')
+            for script in script_tags:
+                src = script.get('src', '')
+                if 'react' in src.lower():
+                    technologies["javascript_frameworks"].append("React")
+                    break
+            
+            # Detectar Google Analytics
+            if 'google-analytics' in response.text or 'ga(' in response.text:
+                technologies["analytics"].append("Google Analytics")
+                
+        except requests.exceptions.RequestException:
+            console.print(f"[bold yellow]No se pudo conectar a {domain} para análisis de tecnologías[/bold yellow]")
+        
+        # Mostrar resultados
+        if any(technologies.values()):
+            table = Table(title=f"Tecnologías Detectadas - {domain}", show_header=True, header_style="bold cyan")
+            table.add_column("Categoría")
+            table.add_column("Tecnologías")
+            
+            for category, techs in technologies.items():
+                if techs:
+                    table.add_row(category.replace('_', ' ').title(), ", ".join(techs))
+            
+            console.print(table)
+        else:
+            console.print(f"[bold yellow]No se detectaron tecnologías específicas para {domain}[/bold yellow]")
+        
+        return technologies
+        
+    except Exception as e:
+        console.print(f"[bold red]Error en detección de tecnologías:[/bold red] {e}")
+        return {"error": f"Error en detección de tecnologías: {e}"}
+
+# Función para escaneo básico de puertos
+def basic_port_scan(domain, ports=[21, 22, 23, 25, 53, 80, 110, 443, 993, 995, 8080, 8443]):
+    try:
+        console.print(f"[bold blue]Escaneando puertos comunes para {domain}...[/bold blue]")
+        
+        ip = socket.gethostbyname(domain)
+        open_ports = []
+        
+        table = Table(title=f"Escaneo de Puertos - {domain} ({ip})", show_header=True, header_style="bold red")
+        table.add_column("Puerto")
+        table.add_column("Servicio")
+        table.add_column("Estado")
+        
+        for port in ports:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex((ip, port))
+                
+                if result == 0:
+                    service_name = socket.getservbyport(port, 'tcp') if port in [21, 22, 23, 25, 53, 80, 110, 443] else "Desconocido"
+                    open_ports.append(port)
+                    table.add_row(str(port), service_name, "✅ ABIERTO")
+                else:
+                    table.add_row(str(port), "-", "❌ CERRADO")
+                
+                sock.close()
+                
+            except (socket.gaierror, socket.timeout, OSError):
+                table.add_row(str(port), "-", "❌ ERROR")
+        
+        console.print(table)
+        return open_ports
+        
+    except Exception as e:
+        console.print(f"[bold red]Error en escaneo de puertos:[/bold red] {e}")
+        return {"error": f"Error en escaneo de puertos: {e}"}
 
 # Función para buscar fugas de información en ProxyNova
 def find_leaks_proxynova(domain, proxy=None, number=10):
@@ -574,7 +757,7 @@ def find_leaks_proxynova(domain, proxy=None, number=10):
         return []
 
 # Función para descargar archivos encontrados con Google Dorks
-def download_files_from_dorks(google_dorks_results, download_folder): # Modificado para usar download_folder
+def download_files_from_dorks(google_dorks_results, download_folder):
     if not os.path.exists(download_folder):
         os.makedirs(download_folder)
     
@@ -727,20 +910,18 @@ def generate_excel_report(report, output_folder):
 
             # Hoja: Netlas Info
             if report['netlas_info'] and not report['netlas_info'].get('error') and report['netlas_info'].get('items'):
-                # Convertir los items en un formato plano si son muy anidados
                 flat_netlas_data = []
                 for item in report['netlas_info']['items']:
                     flat_item = {}
                     for k, v in item.items():
                         if isinstance(v, (dict, list)):
-                            flat_item[k] = json.dumps(v) # Convertir dicts/lists a string JSON
+                            flat_item[k] = json.dumps(v)
                         else:
                             flat_item[k] = v
                     flat_netlas_data.append(flat_item)
                 pd.DataFrame(flat_netlas_data).to_excel(writer, sheet_name='Netlas Info', index=False)
             else:
                  pd.DataFrame([{"Info": "No se encontraron resultados en Netlas o hubo un error."}]).to_excel(writer, sheet_name='Netlas Info', index=False)
-
 
             # Hoja: Hunter.how Info
             if report['hunterhow_info'] and not report['hunterhow_info'].get('error') and report['hunterhow_info'].get('results'):
@@ -755,9 +936,51 @@ def generate_excel_report(report, output_folder):
                     if isinstance(urls, list):
                         for url in urls:
                             dorks_data.append({"Dork Query": dork, "Found URL": url})
-                    else: # Handle error messages
+                    else:
                         dorks_data.append({"Dork Query": dork, "Found URL": urls})
             pd.DataFrame(dorks_data).to_excel(writer, sheet_name='Google Dorks', index=False)
+
+            # Hoja: Bing Dorks
+            bing_dorks_data = []
+            if report.get('bing_dorks'):
+                for dork, urls in report['bing_dorks'].items():
+                    if isinstance(urls, list):
+                        for url in urls:
+                            bing_dorks_data.append({"Dork Query": dork, "Found URL": url})
+                    else:
+                        bing_dorks_data.append({"Dork Query": dork, "Found URL": urls})
+            pd.DataFrame(bing_dorks_data).to_excel(writer, sheet_name='Bing Dorks', index=False)
+
+            # Hoja: Security Headers
+            headers_data = []
+            if report.get('security_headers'):
+                for protocol, headers in report['security_headers'].items():
+                    for header, value in headers.items():
+                        headers_data.append({
+                            "Protocolo": protocol,
+                            "Header": header,
+                            "Valor": value,
+                            "Estado": "Presente" if value != "No presente" else "Ausente"
+                        })
+            pd.DataFrame(headers_data).to_excel(writer, sheet_name='Security Headers', index=False)
+
+            # Hoja: Technologies
+            tech_data = []
+            if report.get('technologies'):
+                for category, techs in report['technologies'].items():
+                    if techs:
+                        tech_data.append({
+                            "Categoría": category.replace('_', ' ').title(),
+                            "Tecnologías": ", ".join(techs)
+                        })
+            pd.DataFrame(tech_data).to_excel(writer, sheet_name='Technologies', index=False)
+
+            # Hoja: Open Ports
+            if report.get('open_ports'):
+                ports_data = [{"Puerto": port} for port in report['open_ports']]
+                pd.DataFrame(ports_data).to_excel(writer, sheet_name='Open Ports', index=False)
+            else:
+                pd.DataFrame([{"Puerto": "No se realizó escaneo de puertos o no se encontraron puertos abiertos."}]).to_excel(writer, sheet_name='Open Ports', index=False)
 
             # Hoja: Data Leaks
             if report['leaks']:
@@ -931,7 +1154,7 @@ def generate_html_report(report, output_folder):
                 padding-right: 5px;
             }
             .terminal-block p, .terminal-block table {
-                margin-top: 20px; /* Adjust for pseudo-element */
+                margin-top: 20px;
             }
 
             @keyframes flicker {
@@ -1207,6 +1430,104 @@ def generate_html_report(report, output_folder):
             </div>
             {% endif %}
 
+            {% if report.get('bing_dorks') %}
+            <h2>BING DORKS RESULTS</h2>
+            <div class="terminal-block">
+                {% for dork, results in report['bing_dorks'].items() %}
+                    <h3>{{ dork }}</h3>
+                    {% if results is iterable and results is not string and results %}
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>URL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for result in results %}
+                            <tr>
+                                <td><a href="{{ result }}" target="_blank">{{ result }}</a></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <p>No se encontraron resultados para este dork o hubo un error.</p>
+                    {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if report.get('security_headers') %}
+            <h2>SECURITY HEADERS ANALYSIS</h2>
+            <div class="terminal-block">
+                {% for protocol, headers in report['security_headers'].items() %}
+                    <h3>{{ protocol.upper() }}://{{ report['domain'] }}</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Header</th>
+                                <th>Value</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for header, value in headers.items() %}
+                            <tr>
+                                <td>{{ header }}</td>
+                                <td>{{ value }}</td>
+                                <td>{% if value != "No presente" %}✅{% else %}❌{% endif %}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if report.get('technologies') %}
+            <h2>TECHNOLOGIES DETECTED</h2>
+            <div class="terminal-block">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th>Technologies</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for category, techs in report['technologies'].items() %}
+                            {% if techs %}
+                            <tr>
+                                <td>{{ category.replace('_', ' ').title() }}</td>
+                                <td>{{ techs | join(", ") }}</td>
+                            </tr>
+                            {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if report.get('open_ports') %}
+            <h2>OPEN PORTS SCAN</h2>
+            <div class="terminal-block">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Port</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for port in report['open_ports'] %}
+                        <tr>
+                            <td>{{ port }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
             {% if report['leaks'] %}
             <h2>DATA LEAKS</h2>
             <div class="terminal-block">
@@ -1248,8 +1569,8 @@ def generate_html_report(report, output_folder):
         file.write(html_content)
     return report_filename
 
-# <--- NUEVA FUNCIÓN analyze_domain AQUÍ --- >
-def analyze_domain(domain, api_keys):
+# Función principal para analizar un dominio
+def analyze_domain(domain, api_keys, dorks_list, args):
     report = {
         "domain": domain,
         "ip": None,
@@ -1261,6 +1582,10 @@ def analyze_domain(domain, api_keys):
         "netlas_info": {},
         "hunterhow_info": {},
         "google_dorks": {},
+        "bing_dorks": {},
+        "security_headers": {},
+        "technologies": {},
+        "open_ports": [],
         "leaks": []
     }
 
@@ -1277,7 +1602,7 @@ def analyze_domain(domain, api_keys):
     report["subdomains"] = get_securitytrails_subdomains(api_keys.get("securitytrails"), domain)
 
     # 5. Obtener información de Shodan
-    if report["ip"] and "Error" not in report["ip"]: # Solo si la IP se obtuvo correctamente
+    if report["ip"] and "Error" not in report["ip"]:
         report["shodan_info"] = get_shodan_info(api_keys.get("shodan"), report["ip"])
     else:
         console.print("[bold yellow]Saltando Shodan: IP no disponible o error al obtenerla.[/bold yellow]")
@@ -1290,35 +1615,68 @@ def analyze_domain(domain, api_keys):
     report["hunterhow_info"] = query_hunterhow(domain, api_keys.get("hunterhow"))
 
     # 8. Google Dorks (con API o sin ella)
-    if api_keys.get("google_api_key") and api_keys.get("google_cse_id"):
-        report["google_dorks"] = get_google_dorks_api(domain, api_keys["google_api_key"], api_keys["google_cse_id"])
-    else:
-        console.print("[bold yellow]Google API Keys no configuradas. Intentando Google Dorks via scraping (puede ser inestable).[/bold yellow]")
-        report["google_dorks"] = get_google_dorks_scraper(domain)
-    
-    # Descargar archivos encontrados con Google Dorks
-    google_dork_download_folder = os.path.join(os.getcwd(), domain.replace('.', '_'), "google_dork_downloads")
-    download_files_from_dorks(report["google_dorks"], google_dork_download_folder)
+    if dorks_list and not args.usebing:
+        if api_keys.get("google_api_key") and api_keys.get("google_cse_id") and not args.sinapigoogle:
+            report["google_dorks"] = get_google_dorks_api(domain, api_keys["google_api_key"], api_keys["google_cse_id"], dorks_list)
+        else:
+            if args.sinapigoogle:
+                console.print("[bold yellow]Forzando el uso de scraping para Google Dorks (--sinapigoogle).[/bold yellow]")
+            else:
+                console.print("[bold yellow]Google API Keys no configuradas. Usando scraping para Google Dorks.[/bold yellow]")
+            report["google_dorks"] = get_google_dorks_scraper(domain, dorks_list)
+        
+        google_dork_download_folder = os.path.join(os.getcwd(), domain.replace('.', '_'), "google_dork_downloads")
+        download_files_from_dorks(report["google_dorks"], google_dork_download_folder)
 
-    # 9. Buscar fugas de información
+    # 9. Bing Dorks (si se solicita)
+    if dorks_list and args.usebing:
+        if api_keys.get("bing_api_key") and not args.sinapibing:
+            report["bing_dorks"] = get_bing_dorks_api(domain, api_keys["bing_api_key"], dorks_list)
+        else:
+            if args.sinapibing:
+                console.print("[bold cyan]Forzando el uso de scraping para Bing Dorks (--sinapibing).[/bold cyan]")
+            else:
+                console.print("[bold cyan]Bing API Key no configurada. Usando scraping para Bing Dorks.[/bold cyan]")
+            report["bing_dorks"] = get_bing_dorks_scraper(domain, dorks_list)
+
+    # 10. Análisis de headers de seguridad
+    if args.analyze_headers:
+        report["security_headers"] = analyze_security_headers(domain)
+
+    # 11. Detección de tecnologías
+    if args.detect_tech:
+        report["technologies"] = detect_technologies(domain)
+
+    # 12. Escaneo de puertos
+    if args.scan_ports:
+        report["open_ports"] = basic_port_scan(domain)
+
+    # 13. Buscar fugas de información
     report["leaks"] = find_leaks_proxynova(domain)
 
     return report
-# <--- FIN DE LA NUEVA FUNCIÓN analyze_domain --- >
 
 # Función principal
 def main():
     print_hacker_banner()
     args = parse_args()
 
-    # Define tus API Keys aquí. Si no tienes una, déjala como cadena vacía "".
+    # Leer dorks desde archivo si se proporcionó
+    dorks_list = []
+    if args.dork:
+        dorks_list = read_dorks_from_file(args.dork)
+        if not dorks_list:
+            console.print("[bold red]No se pudieron cargar dorks. Continuando sin búsqueda con Dorks.[/bold red]")
+
+    # Define tus API Keys aquí
     api_keys = {
-        "shodan": "", # Tu API Key de Shodan aquí
-        "securitytrails": "", # Tu API Key de SecurityTrails aquí
-        "google_api_key": "YOUR_GOOGLE_API_KEY", # <--- ¡PON TU CLAVE AQUÍ!
-        "google_cse_id": "YOUR_GOOGLE_CSE_ID", # <--- ¡PON TU ID DE CUSTOM SEARCH ENGINE AQUÍ!
-        "netlas": "", # Tu API Key de Netlas aquí
-        "hunterhow": "" # Tu API Key de Hunter.how aquí
+        "shodan": "",
+        "securitytrails": "",
+        "google_api_key": "",
+        "google_cse_id": "",
+        "netlas": "",
+        "hunterhow": "",
+        "bing_api_key": ""
     }
     
     domains_to_analyze = []
@@ -1329,7 +1687,7 @@ def main():
             with open(args.list, 'r') as f:
                 for line in f:
                     domain = line.strip()
-                    if domain: # Asegurarse de que la línea no esté vacía
+                    if domain:
                         domains_to_analyze.append(domain)
         except FileNotFoundError:
             console.print(f"[bold red]Error: El archivo de lista '{args.list}' no fue encontrado.[/bold red]")
@@ -1352,19 +1710,17 @@ def main():
         else:
             console.print(f"[bold yellow]Carpeta de salida ya existe:[/bold yellow] {output_folder}")
 
-        report = analyze_domain(domain, api_keys)
+        report = analyze_domain(domain, api_keys, dorks_list, args)
         
-        # Generar y guardar el informe HTML en la nueva carpeta
         html_report_filename = generate_html_report(report, output_folder)
         console.print(f"[bold green]Informe HTML generado y guardado como '{html_report_filename}'[/bold green]")
 
-        # Generar y guardar el informe Excel en la nueva carpeta
         excel_report_filename = generate_excel_report(report, output_folder)
         if excel_report_filename:
             console.print(f"[bold green]Informe Excel generado y guardado como '{excel_report_filename}'[/bold green]")
         
         console.print(Panel(f"[bold blue]Análisis completado para el dominio:[/bold blue] [bold yellow]{domain}[/bold yellow]\n", border_style="green", expand=False))
-        console.print("\n" + "="*80 + "\n") # Separador visual entre dominios
+        console.print("\n" + "="*80 + "\n")
 
 if __name__ == "__main__":
     main()
