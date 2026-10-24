@@ -682,7 +682,7 @@ def get_shodan(ip: str, cfg: Config) -> Dict:
         "org":       data.get("org", "Unknown"),
         "country":   data.get("country_name", "Unknown"),
         "hostnames": data.get("hostnames", []),
-        "vulns":     list(data.get("vulns", {}).keys()),
+        "vulns":     list(data["vulns"].keys()) if isinstance(data.get("vulns"), dict) else list(data.get("vulns") or []),
         "tags":      data.get("tags", []),
     }
 
