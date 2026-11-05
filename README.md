@@ -49,7 +49,7 @@
 
 ```bash
 # Clone
-git clone https://github.com/youruser/triprecon.git
+git clone https://github.com/creadpag/TripRecon.git
 cd triprecon
 
 # Install dependencies
