@@ -3,7 +3,6 @@
 TripRecon v3.0 — Advanced OSINT & Reconnaissance for Bug Bounty
 By CreadPag | For authorized security testing ONLY
 
-
 """
 
 import os
@@ -2590,6 +2589,10 @@ SUBDOMAIN_DORK_SET: List[str] = [
     'site:{domain} ext:pdf OR ext:xls OR ext:xlsx OR ext:csv OR ext:log',
     'site:{domain} inurl:api OR inurl:swagger OR inurl:graphql OR inurl:v1',
     'site:{domain} intitle:"index of"',
+    # 2026: containers + AI exposures per live host
+    'site:{domain} inurl:"/v2/_catalog" OR intitle:"Kubernetes Dashboard"',
+    'site:{domain} intitle:"Jupyter" OR intitle:"MLflow" OR inurl:":7860"',
+    'site:{domain} ext:env intext:"OPENAI_API_KEY" OR intext:"ANTHROPIC_API_KEY"',
 ]
 
 
