@@ -3,17 +3,7 @@
 TripRecon v3.0 — Advanced OSINT & Reconnaissance for Bug Bounty
 By CreadPag | For authorized security testing ONLY
 
-v3 additions over v3:
-  - ASN enumeration via Team Cymru DNS + RIPE Stat — find all IP ranges owned by target org
-  - WHOIS data — pivoting by registrant, email, org
-  - Favicon hash (MurmurHash3) — Shodan pivot to find same stack on other IPs
-  - JavaScript endpoint extraction — spider JS files, extract API paths & secrets
-  - Wayback parameter mining — extract unique GET params for fuzzing
-  - Subdomain takeover detection — CNAME to dangling services (S3, GH Pages, etc.)
-  - GitHub dorking — secrets, tokens, API keys in public repos
-  - Cloud bucket enumeration — S3/GCS/Azure bucket permutations (no download)
-  - SPF/DMARC deep analysis — email spoofing surface
-  - Improved risk scoring with new finding categories
+
 """
 
 import os
@@ -48,15 +38,38 @@ from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 from dotenv import load_dotenv
 
-# ── Optional: pip install duckduckgo-search ──────────────────────────────────
+# ── DuckDuckGo search ─────────────────────────────────────────────────────────
+# The library was renamed `duckduckgo_search` → `ddgs`; the OLD one now returns 0
+# results, so prefer `ddgs` (pip install ddgs) and only fall back to the old name.
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
     DDG_AVAILABLE = True
 except ImportError:
-    DDG_AVAILABLE = False
+    try:
+        from duckduckgo_search import DDGS
+        DDG_AVAILABLE = True
+    except ImportError:
+        DDG_AVAILABLE = False
+
+# ── Playwright (real-browser scraping) ────────────────────────────────────────
+# Bing/Google serve a degraded, result-less page to `requests`, but a real
+# headless browser gets full organic results. Used for browser-based Bing dorks.
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-load_dotenv()
+
+# Cargar .env de forma robusta: directorio actual, junto al script y en el HOME.
+# Así las keys se leen sin importar desde qué carpeta se ejecute recon.py.
+_env_loaded = load_dotenv()  # busca desde el cwd hacia arriba
+for _env_dir in (os.path.dirname(os.path.abspath(__file__)), os.path.expanduser("~")):
+    _env_path = os.path.join(_env_dir, ".env")
+    if os.path.isfile(_env_path):
+        load_dotenv(_env_path, override=False)
+        _env_loaded = True
 console = Console()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -328,6 +341,11 @@ class Config:
     urlscan_key:        str   = field(default_factory=lambda: os.getenv("URLSCAN_API_KEY", ""))
     ipinfo_key:         str   = field(default_factory=lambda: os.getenv("IPINFO_API_KEY", ""))
     github_token:       str   = field(default_factory=lambda: os.getenv("GITHUB_TOKEN", ""))
+    fofa_email:         str   = field(default_factory=lambda: os.getenv("FOFA_EMAIL", ""))
+    fofa_key:           str   = field(default_factory=lambda: os.getenv("FOFA_KEY", ""))
+    censys_token:       str   = field(default_factory=lambda: os.getenv("CENSYS_TOKEN", "") or os.getenv("CENSYS_API_SECRET", ""))
+    censys_org:         str   = field(default_factory=lambda: os.getenv("CENSYS_ORG_ID", ""))
+    leakix_key:         str   = field(default_factory=lambda: os.getenv("LEAKIX_API_KEY", ""))
     proxy:              str   = field(default_factory=lambda: os.getenv("PROXY", ""))
     max_threads:        int   = field(default_factory=lambda: int(os.getenv("MAX_THREADS", "15")))
     request_delay:      float = field(default_factory=lambda: float(os.getenv("REQUEST_DELAY", "1.5")))
@@ -487,9 +505,13 @@ def parse_args() -> argparse.Namespace:
 
     # ── Search engines ────────────────────────────────────────────────────────
     eng = p.add_argument_group("Search Engines (require --dork)")
-    eng.add_argument("--engines", type=str, default="google",
+    eng.add_argument("--engines", type=str, default="bing",
                      metavar="LIST",
-                     help="Comma-separated engines: google,bing,ddg,yahoo,yandex,brave,all  (default: google)")
+                     help="Comma-separated engines: bing,ddg,brave,yahoo,yandex,google,all  (default: bing; 'all' tries Google last)")
+    eng.add_argument("--dork-subs", action="store_true",
+                     help="Dork each LIVE subdomain (site:<sub>) with a curated high-value set; also exports <domain>_live.txt. Included in --all.")
+    eng.add_argument("--dork-subs-max", type=int, default=10, metavar="N",
+                     help="Max live subdomains to dork (default: 10) — keeps engine requests sane")
     eng.add_argument("--sinapigoogle", action="store_true",
                      help="Force Google scraping instead of Custom Search API")
     eng.add_argument("--sinapibing",   action="store_true",
@@ -581,24 +603,36 @@ def get_dns_records(domain: str) -> Dict[str, List[str]]:
     return result
 
 def get_crtsh_subdomains(domain: str, cfg: Config) -> Tuple[List[Dict], List[str]]:
-    url = f"https://crt.sh/?q={domain}&output=json"
+    # crt.sh is flaky: a single query often times out or returns an empty 200.
+    # Hit both the exact and the wildcard identity, merge, and keep whatever any
+    # attempt yields instead of discarding everything on one failure.
     subdomains: set = set()
     wildcards:  set = set()
 
-    for attempt in range(3):
-        try:
-            resp = requests.get(url, timeout=30 + attempt * 10)
-            if resp.ok:
-                for entry in resp.json():
-                    for name in entry.get("name_value", "").split("\n"):
-                        name = name.strip()
-                        if "*" in name:
-                            wildcards.add(name)
-                        elif name:
-                            subdomains.add(name)
-                break
-        except Exception:
-            time.sleep(5)
+    def harvest(resp) -> int:
+        added = 0
+        for entry in resp.json():
+            for name in entry.get("name_value", "").split("\n"):
+                name = name.strip().lower().lstrip("*.")
+                if not name or not name.endswith(domain):
+                    continue
+                if "*" in entry.get("name_value", "") and name == domain:
+                    wildcards.add("*." + domain)
+                subdomains.add(name)
+                added += 1
+        return added
+
+    for q in (domain, f"%25.{domain}"):           # exact + wildcard identities
+        url = f"https://crt.sh/?q={q}&output=json"
+        for attempt in range(3):
+            try:
+                resp = requests.get(url, timeout=30 + attempt * 10,
+                                    headers={"User-Agent": API_UA})
+                if resp.ok and resp.text.strip():
+                    harvest(resp)
+                    break
+            except Exception:
+                time.sleep(3)
 
     def resolve(sub: str) -> Dict:
         try:
@@ -670,7 +704,7 @@ def get_shodan(ip: str, cfg: Config) -> Dict:
     if not cfg.shodan_key or not ip:
         return {"error": "No Shodan key or IP"}
     url = f"https://api.shodan.io/shodan/host/{ip}?key={cfg.shodan_key}"
-    resp = make_request(url, cfg)
+    resp = make_request(url, cfg, extra_headers={"User-Agent": API_UA})
     if not resp:
         return {"error": "No response"}
     data = resp.json()
@@ -685,6 +719,253 @@ def get_shodan(ip: str, cfg: Config) -> Dict:
         "vulns":     list(data["vulns"].keys()) if isinstance(data.get("vulns"), dict) else list(data.get("vulns") or []),
         "tags":      data.get("tags", []),
     }
+
+
+# Known CDN / reverse-proxy ASNs — an IP in one of these is NOT the origin.
+# Deliberately NO AWS (AS16509/AS14618) or Google (AS15169): those ASNs also host
+# ordinary VPS/EC2 origins, so we'd flag real origins as edges. True CloudFront /
+# Google-CDN edges are caught below by their *.cloudfront.net / hostname instead.
+CDN_ASNS: Set[str] = {
+    "AS13335",  # Cloudflare
+    "AS20940", "AS16625", "AS16702", "AS32787",  # Akamai
+    "AS54113",  # Fastly
+    "AS13238",  # Yandex
+    "AS22822",  # Limelight/Edgio
+    "AS209242", # Cloudflare (London)
+}
+
+# Hostname suffixes that only ever belong to a CDN edge, never an origin.
+CDN_HOST_SUFFIXES: Tuple[str, ...] = (
+    ".cloudfront.net", ".akamaiedge.net", ".akamai.net", ".edgekey.net",
+    ".edgesuite.net", ".fastly.net", ".fastlylb.net", ".cloudflare.net",
+    ".incapdns.net", ".azureedge.net", ".cdn.cloudflare.net",
+)
+
+def _is_cdn(result: Dict) -> bool:
+    """True if a match clearly belongs to a CDN/proxy, not an origin host.
+    Three signals: a known pure-CDN ASN, a pure-CDN/WAF vendor org name, or a
+    hostname under a CDN-only domain. ASN/org matching avoids Akamai, Google and
+    AWS (they sell VPS too) — those edges are caught via the hostname suffix."""
+    asn = (result.get("asn") or "").upper()
+    org = (result.get("org") or "").lower()
+    hosts = " ".join(result.get("hostnames") or []).lower()
+    if asn in CDN_ASNS:
+        return True
+    if any(p in org for p in ("cloudflare", "fastly", "incapsula",
+                              "imperva", "sucuri", "edgio")):
+        return True
+    return any(h in hosts for h in (s.lstrip(".") for s in CDN_HOST_SUFFIXES))
+
+
+# HTTP statuses that mean "this source can't serve THIS account right now"
+# (missing entitlement / out of quota / rate limited). A clean skip, not a bug.
+UNAVAILABLE_HTTP: Set[int] = {401, 402, 403, 429}
+
+# JSON APIs (Shodan etc.) sit behind a WAF that 403s browser User-Agents — the
+# random browser headers make_request uses for scraping must be overridden here.
+API_UA: str = "triprecon/3.0 (+api-client)"
+
+def _src(name: str, status: str, reason: str = "", summary: str = "",
+         query: Optional[str] = None, origins: Optional[List] = None,
+         cdn: Optional[List] = None, unknown: Optional[List] = None, **extra) -> Dict:
+    """Uniform result for every intel source so the orchestrator never sees a crash.
+    status: 'ok' | 'unavailable' (no key / auth / quota / tier) | 'error' (unexpected).
+    Only 'error' is a real problem; 'unavailable' is a normal, expected skip."""
+    r: Dict = {"source": name, "status": status, "reason": reason,
+               "origins": origins or [], "cdn": cdn or [], "unknown": unknown or []}
+    if query is not None:
+        r["query"] = query
+    if summary:
+        r["summary"] = summary  # persist so the HTML/JSON report shows it, not just the console
+    r.update(extra)
+    color = {"ok": "green", "unavailable": "yellow", "error": "red"}.get(status, "white")
+    mark  = {"ok": "✓", "unavailable": "○", "error": "✗"}.get(status, "-")
+    if status == "ok":
+        body = summary or (f"{len(r['origins'])} origen, {len(r['cdn'])} edge/CDN"
+                           + (f", {len(r['unknown'])} sin-ASN" if r['unknown'] else ""))
+        if query:
+            body += f"  →  {query}"
+    else:
+        body = f"{'no disponible' if status == 'unavailable' else 'error'} — {reason}"
+    console.print(f"[{color}]  {mark} {name}:[/{color}] {body}")
+    return r
+
+def shodan_search(query: str, cfg: Config, max_pages: int = 1) -> Dict:
+    """
+    Search Shodan (not a single-host lookup) by a pivot query such as a favicon
+    hash or a TLS cert CN, then split results into likely-origin hosts vs CDN
+    edges. This is what turns a favicon/cert pivot into candidate origin IPs.
+    Needs SHODAN_API_KEY. Returns {"origins": [...], "cdn": [...], "query": ...}.
+    """
+    if not cfg.shodan_key:
+        return _src("Shodan", "unavailable", "sin SHODAN_API_KEY", query=query)
+    if not query:
+        return _src("Shodan", "error", "query vacía")
+    origins: List[Dict] = []
+    cdn: List[Dict] = []
+    for page in range(1, max_pages + 1):
+        url = "https://api.shodan.io/shodan/host/search"
+        params = {"key": cfg.shodan_key, "query": query, "page": page}
+        resp = make_request(url, cfg, params=params, extra_headers={"User-Agent": API_UA})
+        if resp is None:  # Response is falsy on any 4xx, so test identity, not truthiness
+            return _src("Shodan", "error", "sin respuesta de red", query=query)
+        if resp.status_code in UNAVAILABLE_HTTP:
+            return _src("Shodan", "unavailable", f"HTTP {resp.status_code} (plan sin filtros de búsqueda)", query=query)
+        try:
+            data = resp.json()
+        except Exception:
+            return _src("Shodan", "error", "JSON inválido", query=query)
+        if isinstance(data, dict) and data.get("error"):
+            err = str(data["error"]); low = err.lower()
+            # plan/credit/rate messages are an entitlement issue, not a code bug
+            st = "unavailable" if any(w in low for w in
+                 ("membership", "upgrade", "plan", "rate", "credit", "access", "quota")) else "error"
+            return _src("Shodan", st, err, query=query)
+        for match in data.get("matches", []):
+            row = {
+                "ip":       match.get("ip_str"),
+                "port":     match.get("port"),
+                "asn":      match.get("asn", ""),
+                "org":      match.get("org", ""),
+                "hostnames": match.get("hostnames", []),
+                "cn":       (match.get("ssl", {}).get("cert", {})
+                                  .get("subject", {}).get("CN", "")),
+            }
+            (cdn if _is_cdn(row) else origins).append(row)
+        if len(data.get("matches", [])) < 100:
+            break  # last page
+    return _src("Shodan", "ok", query=query, origins=origins, cdn=cdn,
+                shodan_url=f"https://www.shodan.io/search?query={requests.utils.quote(query)}")
+
+
+def fofa_search(query: str, cfg: Config, size: int = 100) -> Dict:
+    """
+    FOFA search (en.fofa.info). Query is FOFA syntax, e.g. icon_hash="123",
+    cert="example.com", or title="...". Splits results into origin vs CDN.
+    Needs FOFA_EMAIL + FOFA_KEY. FOFA wants the query base64-encoded in `qbase64`.
+    """
+    if not cfg.fofa_email or not cfg.fofa_key:
+        return _src("FOFA", "unavailable", "sin FOFA_EMAIL/FOFA_KEY", query=query)
+    if not query:
+        return _src("FOFA", "error", "query vacía")
+    qb64 = base64.b64encode(query.encode()).decode()
+    url = "https://fofa.info/api/v1/search/all"
+    # asn/as_organization need a paid FOFA tier; keep the default set to fields a
+    # free account can read. Enrichment (ASN/org for CDN filtering) is done after,
+    # per-IP, via the tool's existing ASN lookup.
+    fields = os.getenv("FOFA_FIELDS", "ip,port,host,title")
+    fnames = fields.split(",")
+    params = {
+        "email":  cfg.fofa_email,
+        "key":    cfg.fofa_key,
+        "qbase64": qb64,
+        "size":   size,
+        "fields": fields,
+    }
+    resp = make_request(url, cfg, params=params)
+    if resp is None:  # Response is falsy on any 4xx, so test identity, not truthiness
+        return _src("FOFA", "error", "sin respuesta de red", query=query)
+    if resp.status_code in UNAVAILABLE_HTTP:
+        return _src("FOFA", "unavailable", f"HTTP {resp.status_code}", query=query)
+    try:
+        data = resp.json()
+    except Exception:
+        return _src("FOFA", "error", "JSON inválido", query=query)
+    if data.get("error"):
+        errmsg = str(data.get("errmsg", "FOFA error"))
+        code = (re.search(r"(\d{6})", errmsg) or [None, ""])[1]
+        # 8200xx = account/permission/balance (余额=balance, 权限=permission) → skip, not a bug
+        st = "unavailable" if code.startswith("8200") or "余额" in errmsg or "权限" in errmsg else "error"
+        return _src("FOFA", st, errmsg, query=query)
+    origins: List[Dict] = []
+    cdn: List[Dict] = []
+    unknown: List[Dict] = []
+    for row in data.get("results", []):
+        rec = dict(zip(fnames, (row + [""] * len(fnames))[:len(fnames)]))
+        if rec.get("asn") or rec.get("org") or rec.get("as_organization"):
+            rec.setdefault("org", rec.get("as_organization", ""))
+            (cdn if _is_cdn(rec) else origins).append(rec)
+        else:
+            unknown.append(rec)  # no ASN/org field → classify later via ASN lookup
+    return _src("FOFA", "ok", query=query, origins=origins, cdn=cdn, unknown=unknown)
+
+
+def censys_search(query: str, cfg: Config, page_size: int = 50) -> Dict:
+    """
+    Censys Platform API search (api.platform.censys.io/v3). Best source for cert
+    pivots. Query is CenQL, e.g.:
+        host.services.tls.certificates.leaf_data.subject.common_name="example.com"
+    Auth: a single Personal Access Token (CENSYS_TOKEN, "censys_..." prefix) sent
+    as a Bearer header; CENSYS_ORG_ID optional (needed for paid tiers).
+    Response schema per the Platform transition guide: result.hits[].host_v1.resource.
+    """
+    if not cfg.censys_token:
+        return _src("Censys", "unavailable", "sin CENSYS_TOKEN", query=query)
+    if not query:
+        return _src("Censys", "error", "query vacía")
+    import requests as _rq
+    url = "https://api.platform.censys.io/v3/global/search/query"
+    headers = {"Authorization": f"Bearer {cfg.censys_token}",
+               "Content-Type": "application/json", "Accept": "application/json"}
+    if cfg.censys_org:
+        headers["X-Organization-ID"] = cfg.censys_org
+    try:
+        resp = _rq.post(url, json={"query": query, "page_size": page_size},
+                        headers=headers, timeout=cfg.timeout, verify=False)
+    except Exception as e:
+        return _src("Censys", "error", str(e), query=query)
+    if resp.status_code in UNAVAILABLE_HTTP:
+        msg = {401: "token sin acceso", 403: "tier sin rol API Access",
+               429: "límite de concurrencia"}.get(resp.status_code, "")
+        return _src("Censys", "unavailable", f"HTTP {resp.status_code} {msg}".strip(), query=query)
+    if resp.status_code != 200:
+        return _src("Censys", "error", f"HTTP {resp.status_code}", query=query)
+    try:
+        hits = resp.json().get("result", {}).get("hits", [])
+    except Exception:
+        return _src("Censys", "error", "JSON inválido", query=query)
+    origins: List[Dict] = []
+    cdn: List[Dict] = []
+    for h in hits:
+        res = (h.get("host_v1") or {}).get("resource", {}) or {}
+        asys = res.get("autonomous_system", {}) or {}
+        rec = {"ip": res.get("ip"),
+               "asn": f"AS{asys.get('asn')}" if asys.get("asn") else "",
+               "org": asys.get("name") or asys.get("organization", ""),
+               "ports": [s.get("port") for s in (res.get("services") or h.get("matched_services") or [])]}
+        if not rec["ip"]:
+            continue
+        (cdn if _is_cdn(rec) else origins).append(rec)
+    return _src("Censys", "ok", query=query, origins=origins, cdn=cdn)
+
+
+def leakix_host(ip: str, cfg: Config) -> Dict:
+    """
+    LeakIX host lookup (leakix.net) — exposed services / leaks for an IP.
+    Key optional but strongly recommended (rate limits). Returns raw events.
+    """
+    if not ip:
+        return _src("LeakIX", "error", "sin IP")
+    url = f"https://leakix.net/host/{ip}"
+    headers = {"Accept": "application/json"}
+    if cfg.leakix_key:
+        headers["api-key"] = cfg.leakix_key
+    resp = make_request(url, cfg, extra_headers=headers)
+    if resp is None:  # Response is falsy on any 4xx, so test identity, not truthiness
+        return _src("LeakIX", "error", "sin respuesta de red", ip=ip)
+    if resp.status_code in UNAVAILABLE_HTTP:
+        return _src("LeakIX", "unavailable", f"HTTP {resp.status_code}", ip=ip)
+    if resp.status_code != 200:
+        return _src("LeakIX", "error", f"HTTP {resp.status_code}", ip=ip)
+    try:
+        data = resp.json()
+    except Exception:
+        return _src("LeakIX", "error", "JSON inválido", ip=ip)
+    services = data.get("Services") or []
+    leaks    = data.get("Leaks") or []
+    return _src("LeakIX", "ok", ip=ip,
+                summary=f"{len(services)} servicio(s), {len(leaks)} leak(s)  →  {ip}",
+                services=len(services), leaks=len(leaks), raw=data)
 
 def get_netlas(domain: str, cfg: Config) -> Dict:
     if not cfg.netlas_key:
@@ -1027,7 +1308,13 @@ def detect_technologies(domain: str, cfg: Config) -> Dict[str, List[str]]:
 def port_scan(domain: str, cfg: Config, ports: Optional[List[int]] = None) -> List[Dict]:
     if ports is None:
         ports = DEFAULT_PORTS
-    ip = socket.gethostbyname(domain)
+    # A domain without an A record (NXDOMAIN, CNAME-only, parked) raises gaierror.
+    # That is a normal "no target to scan" case, not a tool failure — skip cleanly.
+    try:
+        ip = socket.gethostbyname(domain)
+    except (socket.gaierror, socket.error) as e:
+        console.print(f"[yellow]  ○ Port scan omitido — {domain} no resuelve a una IP ({e})[/yellow]")
+        return []
     results = []
 
     SERVICE_MAP = {21:"FTP",22:"SSH",23:"Telnet",25:"SMTP",53:"DNS",80:"HTTP",
@@ -1436,26 +1723,49 @@ def _mmh3_hash32(data: bytes) -> int:
     return struct.unpack(">i", struct.pack(">I", h1))[0]
 
 
+def _favicon_candidates(domain: str, cfg: Config) -> List[str]:
+    """Collect favicon URLs: <link rel="icon"> hrefs from the homepage first,
+    then the default /favicon.ico. Many sites never serve /favicon.ico directly
+    (the icon lives elsewhere), so parsing the HTML is what makes the pivot work."""
+    candidates: List[str] = []
+    for scheme in ("https", "http"):
+        resp = make_request(f"{scheme}://{domain}/", cfg)
+        if not resp or not resp.ok or not resp.text:
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for link in soup.find_all("link", rel=True):
+            rels = " ".join(link.get("rel", [])).lower()
+            if "icon" in rels and link.get("href"):
+                full = urljoin(f"{scheme}://{domain}/", link["href"])
+                if full.startswith("http"):  # skip data:/javascript:/etc. inline icons
+                    candidates.append(full)
+        break  # one working scheme is enough to read the HTML
+    candidates += [f"https://{domain}/favicon.ico", f"http://{domain}/favicon.ico"]
+    seen: Set[str] = set()
+    return [u for u in candidates if not (u in seen or seen.add(u))]
+
+
 def get_favicon_hash(domain: str, cfg: Config) -> Dict:
     """
-    Fetch /favicon.ico, compute MurmurHash3 (Shodan's method).
+    Compute the Shodan favicon hash (MurmurHash3 over the base64-encoded icon).
+    Tries <link rel="icon"> targets from the HTML first, then /favicon.ico, and
+    skips HTML bodies so a 200-OK 404 page never yields a bogus hash.
     Shodan search: http.favicon.hash:<hash>
-    Returns hash and a ready-to-use Shodan search URL.
     """
-    for scheme in ("https", "http"):
-        url = f"{scheme}://{domain}/favicon.ico"
+    for url in _favicon_candidates(domain, cfg):
         resp = make_request(url, cfg)
-        if resp and resp.ok and resp.content:
-            raw     = base64.encodebytes(resp.content)
-            fhash   = _mmh3_hash32(raw)
+        ctype = resp.headers.get("Content-Type", "").lower() if resp else ""
+        if resp and resp.ok and resp.content and "text/html" not in ctype:
+            raw      = base64.encodebytes(resp.content)
+            fhash    = _mmh3_hash32(raw)
             shodan_q = f"http.favicon.hash:{fhash}"
-            console.print(f"[green]  ✓ Favicon hash: {fhash}[/green]  →  {shodan_q}")
+            console.print(f"[green]  ✓ Favicon hash: {fhash}[/green]  →  {shodan_q}  ({url})")
             return {
-                "hash":       fhash,
+                "hash":         fhash,
                 "shodan_query": shodan_q,
-                "shodan_url": f"https://www.shodan.io/search?query={requests.utils.quote(shodan_q)}",
-                "size_bytes": len(resp.content),
-                "url":        url,
+                "shodan_url":   f"https://www.shodan.io/search?query={requests.utils.quote(shodan_q)}",
+                "size_bytes":   len(resp.content),
+                "url":          url,
             }
     console.print(f"[yellow]  ⚠ No favicon found for {domain}[/yellow]")
     return {"hash": None, "shodan_query": None}
@@ -1644,8 +1954,8 @@ def check_subdomain_takeover(subdomains: List[str], cfg: Config) -> List[Dict]:
             if result:
                 severity = result["severity"]
                 color = {"CRITICAL":"red","HIGH":"red","MEDIUM":"yellow","LOW":"cyan"}.get(severity,"white")
-                console.print(f"[{color}]  ⚠ Takeover? {result['subdomain']} → {result['service']} [{confidence}][/{color}]"
-                              .replace("[confidence]", f"[{result['confidence']}]"))
+                console.print(f"[{color}]  ⚠ Takeover? {result['subdomain']} → "
+                              f"{result['service']} \\[{result['confidence']}][/{color}]")
                 findings.append(result)
 
     console.print(f"[{'red' if findings else 'green'}]  ✓ Takeover check: {len(findings)} potential vulnerabilities[/{'red' if findings else 'green'}]")
@@ -1927,6 +2237,70 @@ def _format_dorks(dorks: List[str], domain: str) -> List[str]:
     return [d.replace("{domain}", domain) for d in dorks]
 
 
+def _decode_redirect(href: str) -> str:
+    """Return the real target URL behind a search-engine redirect wrapper.
+    Handles Bing (/ck/a?u=a1<b64>), Google (/url?q=), Yahoo (/RU=), DDG (uddg=).
+    A plain http(s) URL is returned unchanged; anything else → ''."""
+    if not href:
+        return ""
+    try:
+        from urllib.parse import urlparse, parse_qs, unquote
+        import base64
+        p = urlparse(href)
+        host = p.netloc.lower()
+        q = parse_qs(p.query)
+        if "bing.com" in host and q.get("u"):            # Bing wraps every result
+            u = q["u"][0]
+            if u.startswith("a1"):
+                s = u[2:] + "=" * (-len(u[2:]) % 4)
+                return base64.urlsafe_b64decode(s).decode("utf-8", "replace")
+        if q.get("q") and (href.startswith("/url?") or "google." in host):
+            return unquote(q["q"][0])
+        if q.get("uddg"):                                 # DuckDuckGo HTML redirect
+            return unquote(q["uddg"][0])
+        if "yahoo.com" in host and "/RU=" in href:
+            import re as _re
+            m = _re.search(r"/RU=([^/]+)/", href)
+            if m:
+                return unquote(m.group(1))
+    except Exception:
+        pass
+    return href if href.startswith("http") else ""
+
+
+def _dork_site_hosts(dork: str) -> List[str]:
+    """Hosts named by site: operators in a dork (already {domain}-substituted).
+    'site:pastebin.com' → ['pastebin.com']; 'site:*.{domain}' → ['creadpag.com']."""
+    import re as _re
+    hosts = []
+    for m in _re.finditer(r'site:([^\s"|)]+)', dork):
+        h = m.group(1).lstrip("*.").rstrip("/").split("/")[0].lower()
+        if h and h != "*" and "." in h:
+            hosts.append(h)
+    return hosts
+
+
+def _dork_filter_urls(urls: List[str], dork: str) -> List[str]:
+    """Decode redirects, then keep only results on the dork's site: target(s),
+    deduped. This is what removes an engine's irrelevant 'no-match' fallback
+    results while still keeping legit cross-site hits (pastebin, s3, github…).
+    A dork with no site: operator keeps all real http results."""
+    from urllib.parse import urlparse
+    hosts = _dork_site_hosts(dork)
+    out, seen = [], set()
+    for raw in urls:
+        u = _decode_redirect(raw)
+        if not u or not u.startswith("http"):
+            continue
+        if hosts:
+            net = urlparse(u).netloc.lower().split("@")[-1].split(":")[0]
+            if not any(net == h or net.endswith("." + h) for h in hosts):
+                continue
+        if u not in seen:
+            seen.add(u); out.append(u)
+    return out
+
+
 def classify_dork_url(url: str) -> Dict[str, str]:
     """
     Given a URL from a dork result, return metadata about it.
@@ -1995,19 +2369,15 @@ def dork_google_scrape(domain: str, dorks: List[str], cfg: Config) -> Dict[str, 
         if not resp:
             results[dork] = []
             continue
-        if "unusual traffic" in resp.text.lower():
-            console.print("[red]  ✗ Google blocked (CAPTCHA). Use --sinapigoogle with proxies.[/red]")
-            results[dork] = ["BLOCKED: Google detected automated traffic"]
+        if "unusual traffic" in resp.text.lower() or "/sorry/" in resp.url:
+            console.print("[red]  ✗ Google bloqueó (CAPTCHA). Usa las APIs o --engines bing,ddg.[/red]")
+            results[dork] = []
             continue
         soup  = BeautifulSoup(resp.text, "html.parser")
-        links = []
-        for g in soup.select("div.g a[href]"):
-            href = g.get("href", "")
-            if href.startswith("/url?q="):
-                href = href[7:].split("&")[0]
-            if href.startswith("http") and domain in href:
-                links.append(href)
-        results[dork] = list(dict.fromkeys(links))
+        # Collect candidate result links broadly; the central filter decodes
+        # /url?q= redirects and scopes to the dork's site: target.
+        links = [a.get("href", "") for a in soup.select('a[href^="/url?q="], #search a[href^="http"], #rso a[href^="http"]')]
+        results[dork] = _dork_filter_urls(links, dork)
     return results
 
 # ── Bing ─────────────────────────────────────────────────────────────────────
@@ -2034,6 +2404,67 @@ def dork_bing_api(domain: str, dorks: List[str], cfg: Config) -> Dict[str, List[
         time.sleep(cfg.request_delay)
     return results
 
+def _find_chromium() -> Optional[str]:
+    """Locate a Playwright-bundled Chromium binary (version-agnostic)."""
+    import glob
+    pats = [
+        os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome"),
+        os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"),
+        os.path.expanduser("~/.cache/ms-playwright/chromium_headless_shell-*/chrome-linux64/headless_shell"),
+    ]
+    for pat in pats:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[-1]
+    return None
+
+
+def dork_bing_browser(domain: str, dorks: List[str], cfg: Config) -> Dict[str, List[str]]:
+    """
+    Bing dorking through a REAL headless browser (Playwright). Bing serves a
+    degraded, result-less page to `requests`, but returns full organic results
+    to an actual browser — so this is the reliable keyless path. Falls back to
+    the requests scraper if Playwright isn't available or the browser fails.
+    """
+    if not PLAYWRIGHT_AVAILABLE:
+        console.print("[yellow]  ⚠ Playwright no instalado (pip install playwright) → requests fallback[/yellow]")
+        return dork_bing_scrape(domain, dorks, cfg)
+
+    results: Dict[str, List[str]] = {}
+    exe = _find_chromium()
+    UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+    try:
+        with sync_playwright() as p:
+            launch_kw = {"headless": True,
+                         "args": ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]}
+            if exe:
+                launch_kw["executable_path"] = exe
+            browser = p.chromium.launch(**launch_kw)
+            ctx = browser.new_context(user_agent=UA, locale="en-US",
+                                      viewport={"width": 1366, "height": 900})
+            page = ctx.new_page()
+            for dork in _format_dorks(dorks, domain):
+                console.print(f"[cyan]  → Bing (browser):[/cyan] {dork}")
+                q = requests.utils.quote(dork)
+                hrefs: List[str] = []
+                try:
+                    page.goto(f"https://www.bing.com/search?q={q}&count=20&setlang=en&cc=US",
+                              wait_until="domcontentloaded", timeout=25000)
+                    page.wait_for_timeout(1200)
+                    anchors = page.query_selector_all("li.b_algo h2 a, li.b_algo a.tilk")
+                    hrefs = [a.get_attribute("href") or "" for a in anchors]
+                except Exception as e:
+                    console.print(f"[yellow]    ⚠ {str(e)[:60]}[/yellow]")
+                results[dork] = _dork_filter_urls(hrefs, dork)
+                time.sleep(max(cfg.request_delay, 1.0))
+            browser.close()
+    except Exception as e:
+        console.print(f"[yellow]  ⚠ Bing browser falló ({str(e)[:50]}) → requests fallback[/yellow]")
+        return dork_bing_scrape(domain, dorks, cfg)
+    return results
+
+
 def dork_bing_scrape(domain: str, dorks: List[str], cfg: Config) -> Dict[str, List[str]]:
     results: Dict[str, List[str]] = {}
     for dork in _format_dorks(dorks, domain):
@@ -2046,12 +2477,14 @@ def dork_bing_scrape(domain: str, dorks: List[str], cfg: Config) -> Dict[str, Li
             results[dork] = []
             continue
         soup  = BeautifulSoup(resp.text, "html.parser")
+        # Bing wraps every result link in a /ck/a?u=a1<b64> redirect — collect the
+        # title links from each result block; the central filter decodes + scopes.
         links = []
         for li in soup.select("li.b_algo"):
-            a = li.find("a")
-            if a and a.get("href", "").startswith("http") and domain in a["href"]:
-                links.append(a["href"])
-        results[dork] = list(dict.fromkeys(links))
+            h2a = li.select_one("h2 a[href]") or li.find("a", href=True)
+            if h2a:
+                links.append(h2a.get("href", ""))
+        results[dork] = _dork_filter_urls(links, dork)
     return results
 
 # ── DuckDuckGo  (free, no API, excellent for bug bounty) ─────────────────────
@@ -2066,10 +2499,14 @@ def dork_ddg(domain: str, dorks: List[str], cfg: Config) -> Dict[str, List[str]]
         try:
             with DDGS() as ddgs:
                 hits = list(ddgs.text(dork, max_results=15))
-            results[dork] = [h["href"] for h in hits]
+            results[dork] = [h.get("href") or h.get("url", "") for h in hits]
         except Exception as e:
-            console.print(f"[red]  ✗ DDG error: {e}[/red]")
-            results[dork] = []
+            # ddgs raises on zero hits — that's a normal empty result, not an error.
+            if "no results" in str(e).lower():
+                results[dork] = []
+            else:
+                console.print(f"[red]  ✗ DDG error: {str(e)[:80]}[/red]")
+                results[dork] = []
         scrape_delay(cfg)
     return results
 
@@ -2087,16 +2524,9 @@ def dork_yahoo(domain: str, dorks: List[str], cfg: Config) -> Dict[str, List[str
             results[dork] = []
             continue
         soup  = BeautifulSoup(resp.text, "html.parser")
-        links = []
-        for a in soup.select("div.compTitle a[href]"):
-            href = a["href"]
-            if "yahoo.com" not in href and href.startswith("http") and domain in href:
-                links.append(href)
-        for a in soup.select("h3.title a[href]"):
-            href = a.get("href", "")
-            if href.startswith("http") and domain in href:
-                links.append(href)
-        results[dork] = list(dict.fromkeys(links))
+        links = [a.get("href", "") for a in
+                 soup.select("div.compTitle a[href], h3.title a[href], a[href*='/RU=']")]
+        results[dork] = _dork_filter_urls(links, dork)
     return results
 
 # ── Yandex ────────────────────────────────────────────────────────────────────
@@ -2113,12 +2543,9 @@ def dork_yandex(domain: str, dorks: List[str], cfg: Config) -> Dict[str, List[st
             results[dork] = []
             continue
         soup  = BeautifulSoup(resp.text, "html.parser")
-        links = []
-        for a in soup.select("a.OrganicTitle-Link, a.link_theme_outer"):
-            href = a.get("href", "")
-            if href.startswith("http") and domain in href:
-                links.append(href)
-        results[dork] = list(dict.fromkeys(links))
+        links = [a.get("href", "") for a in
+                 soup.select("a.OrganicTitle-Link, a.link_theme_outer, a.Link[href^='http']")]
+        results[dork] = _dork_filter_urls(links, dork)
     return results
 
 # ── Brave ─────────────────────────────────────────────────────────────────────
@@ -2153,6 +2580,66 @@ def dork_brave(domain: str, dorks: List[str], cfg: Config) -> Dict[str, List[str
 
 # ── Engine dispatcher ─────────────────────────────────────────────────────────
 
+# Compact, high-value dork set for per-subdomain sweeps. Kept small on purpose:
+# every live subdomain × every engine runs these, so a huge set would get the
+# scraping engines rate-limited/banned fast. One line = several ext/inurl OR'd.
+SUBDOMAIN_DORK_SET: List[str] = [
+    'site:{domain} inurl:login OR inurl:admin OR inurl:dashboard OR inurl:portal',
+    'site:{domain} ext:env OR ext:conf OR ext:ini OR ext:yml OR ext:yaml',
+    'site:{domain} ext:sql OR ext:bak OR ext:old OR ext:backup OR ext:zip',
+    'site:{domain} ext:pdf OR ext:xls OR ext:xlsx OR ext:csv OR ext:log',
+    'site:{domain} inurl:api OR inurl:swagger OR inurl:graphql OR inurl:v1',
+    'site:{domain} intitle:"index of"',
+]
+
+
+def dork_live_subdomains(
+    live_subs: List[Dict],
+    cfg: Config,
+    engines: List[str],
+    args: argparse.Namespace,
+    max_subs: int = 10,
+) -> Dict[str, Dict]:
+    """
+    Run the curated SUBDOMAIN_DORK_SET against each LIVE subdomain, scoped with
+    site:<subdomain> so hits belong to that exact host. Returns
+    {subdomain: {engine: {dork: [{url, is_file, file_type}]}}}.
+    Only subdomains that actually responded online are dorked (the point of the
+    feature), capped at max_subs to keep engine traffic reasonable.
+    """
+    from urllib.parse import urlparse
+
+    def _belongs(url: str, host: str) -> bool:
+        """Keep only results actually ON the target host — some engines (notably
+        DDG scraping) ignore site: and return unrelated noise."""
+        try:
+            net = urlparse(url).netloc.lower().split("@")[-1].split(":")[0]
+            return net == host or net.endswith("." + host)
+        except Exception:
+            return False
+
+    def _filter(engine_results: Dict, host: str) -> Dict:
+        cleaned: Dict = {}
+        for engine, dres in (engine_results or {}).items():
+            cd: Dict = {}
+            for dork, hits in (dres or {}).items():
+                if dork.startswith("_") or not isinstance(hits, list):
+                    cd[dork] = hits
+                    continue
+                cd[dork] = [h for h in hits
+                            if isinstance(h, dict) and _belongs(h.get("url",""), host)]
+            cleaned[engine] = cd
+        return cleaned
+
+    targets = [s.get("subdomain", "") for s in live_subs if s.get("subdomain")][:max_subs]
+    out: Dict[str, Dict] = {}
+    for sub in targets:
+        console.print(f"\n[bold cyan]◈ Dorking live subdomain:[/bold cyan] {sub}")
+        raw = run_dork_engines(sub, SUBDOMAIN_DORK_SET, cfg, engines, args)
+        out[sub] = _filter(raw, sub)
+    return out
+
+
 def run_dork_engines(
     domain: str,
     dorks:  List[str],
@@ -2180,10 +2667,18 @@ def run_dork_engines(
                 raw = dork_google_scrape(domain, dorks, cfg)
 
         elif engine == "bing":
+            # Bing default = real-browser scraping (no API): the Bing Search API was
+            # retired (2025) and requests-scraping is served a degraded page. Only
+            # use the API if a key is set AND the user did not force --sinapibing.
             if cfg.bing_api_key and not args.sinapibing:
                 raw = dork_bing_api(domain, dorks, cfg)
+                real = sum(len(v) for k, v in raw.items()
+                           if not k.startswith("_") and isinstance(v, list))
+                if real == 0:
+                    console.print("[yellow]  ⚠ Bing API sin resultados (API retirada) → navegador[/yellow]")
+                    raw = dork_bing_browser(domain, dorks, cfg)
             else:
-                raw = dork_bing_scrape(domain, dorks, cfg)
+                raw = dork_bing_browser(domain, dorks, cfg)
 
         elif engine == "ddg":
             raw = dork_ddg(domain, dorks, cfg)
@@ -2200,6 +2695,13 @@ def run_dork_engines(
         else:
             console.print(f"[yellow]  ⚠ Unknown engine: {engine}[/yellow]")
             continue
+
+        # Central relevance pass: decode redirects + scope every result to the
+        # dork's site: target. Idempotent for scrapers that already did it, and
+        # it also cleans DDG/Brave/API results (drops engine fallback noise).
+        raw = {d: (v if d.startswith("_") or not isinstance(v, list)
+                   else _dork_filter_urls(v, d))
+               for d, v in raw.items()}
 
         # Enrich: tag each URL with file-type metadata — no network requests
         engine_results[engine] = enrich_dork_results(raw)
@@ -2420,12 +2922,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     --accent2:  #3b82f6;
     --accent3:  #8b5cf6;
     /* text */
-    --text:     #e2e8f0;
-    --text2:    #94a3b8;
-    --text3:    #64748b;
+    --text:     #eaf0f7;
+    --text2:    #b2bdcd;
+    --text3:    #8593a5;
     /* borders */
-    --border:   #1e2d3d;
-    --border2:  #263345;
+    --border:   #273443;
+    --border2:  #35475d;
     /* severity */
     --critical: #f43f5e;
     --high:     #f97316;
@@ -2814,6 +3316,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     flex-shrink: 0;
   }
   .chart-box canvas { max-height: 220px; }
+  .chart-empty {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px; min-height: 180px;
+    color: var(--text3); font-size: 11.5px;
+    font-family: 'JetBrains Mono', monospace; text-align: center;
+    border: 1px dashed var(--border2); border-radius: 10px;
+    background: rgba(255,255,255,.012);
+  }
+  .chart-empty span { font-size: 26px; color: var(--border2); line-height: 1; }
 
   /* ── SECTIONS ────────────────────────────────────────────────────────── */
   .section {
@@ -2878,30 +3389,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .section-header.collapsed .arrow { transform: rotate(-90deg); }
   .section-body { padding: 16px 18px; }
   .section-body.hidden { display: none; }
+  /* Generic collapse utility — used by the dork-engine and subdomain-dork
+     headers (toggle 'hidden' on their next sibling). Without this rule those
+     collapsibles did nothing. */
+  .hidden { display: none; }
 
   /* ── TABLES ──────────────────────────────────────────────────────────── */
   .data-table { width: 100%; border-collapse: separate; border-spacing: 0; }
   .data-table th {
     background: var(--bg4);
     color: var(--accent);
-    font-size: 10px;
+    font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 1.2px;
     text-transform: uppercase;
-    padding: 10px 14px;
+    padding: 11px 16px;
     text-align: left;
     border-bottom: 1px solid var(--border2);
     position: sticky; top: 0; z-index: 1;
     font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
   }
   .data-table td {
-    padding: 9px 14px;
-    border-bottom: 1px solid rgba(30,45,61,.7);
+    padding: 11px 16px;
+    border-bottom: 1px solid rgba(39,52,67,.7);
     vertical-align: top;
-    word-break: break-all;
-    font-size: 12.5px;
+    word-break: break-word;
+    font-size: 13px;
     color: var(--text2);
-    line-height: 1.5;
+    line-height: 1.55;
   }
   .data-table tbody tr:nth-child(even) td { background: rgba(255,255,255,.018); }
   .data-table tbody tr:last-child td { border-bottom: none; }
@@ -2910,6 +3426,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .data-table .url a:hover { color: var(--accent); }
   .data-table td:first-child { font-weight: 600; color: var(--text); }
   .scroll-wrap { overflow-x: auto; max-height: 460px; overflow-y: auto; border-radius: 8px; border: 1px solid var(--border); background: var(--bg2); }
+
+  /* consistent sub-heading inside a section (replaces ad-hoc inline h3/h4) */
+  .subhead {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--accent2);
+    margin: 18px 0 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .subhead:first-child { margin-top: 4px; }
+  .subhead::before { content: ''; width: 3px; height: 12px; background: var(--accent2); border-radius: 2px; flex-shrink: 0; }
+  .subhead .muted { color: var(--text3); text-transform: none; letter-spacing: 0; font-weight: 400; }
+  /* note under a truncated table */
+  .table-note { margin-top: 8px; font-size: 11px; color: var(--text3); font-style: italic; }
 
   /* ── FILTER INPUT ────────────────────────────────────────────────────── */
   .filter-input {
@@ -3321,7 +3854,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
   /* ── CONTENT SCROLL AREA ──────────────────────────────────────────────── */
   .content {
-    flex: 1; overflow-y: auto; overflow-x: hidden;
+    flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
     scrollbar-width: thin; scrollbar-color: var(--border2) transparent;
   }
   .wrapper { max-width: 1200px; margin: 0 auto; padding: 24px 24px 40px; }
@@ -3372,73 +3905,73 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <nav class="sidebar-nav" id="sideNav">
       <div class="nav-group">
         <div class="nav-group-label">Overview</div>
-        <div class="nav-item" onclick="scrollTo('sec-summary')">
+        <div class="nav-item" onclick="goToSection('sec-summary')">
           <span class="nav-icon">⚡</span> Overview
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-exec')">
+        <div class="nav-item" onclick="goToSection('sec-exec')">
           <span class="nav-icon">🎯</span> Risk Score
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-charts')">
+        <div class="nav-item" onclick="goToSection('sec-charts')">
           <span class="nav-icon">📊</span> Charts
         </div>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">DNS &amp; Network</div>
-        <div class="nav-item" onclick="scrollTo('sec-dns')">
+        <div class="nav-item" onclick="goToSection('sec-dns')">
           <span class="nav-icon">🌐</span> DNS Records
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-subs')">
+        <div class="nav-item" onclick="goToSection('sec-subs')">
           <span class="nav-icon">🔀</span> Subdomains
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-ports')">
+        <div class="nav-item" onclick="goToSection('sec-ports')">
           <span class="nav-icon">🔌</span> Open Ports
         </div>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">Attack Surface</div>
-        <div class="nav-item" onclick="scrollTo('sec-paths')">
+        <div class="nav-item" onclick="goToSection('sec-paths')">
           <span class="nav-icon">📂</span> Sensitive Paths
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-js')">
+        <div class="nav-item" onclick="goToSection('sec-js')">
           <span class="nav-icon">📜</span> JS Analysis
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-dorks')">
+        <div class="nav-item" onclick="goToSection('sec-dorks')">
           <span class="nav-icon">🔍</span> Google Dorks
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-leaks')">
+        <div class="nav-item" onclick="goToSection('sec-leaks')">
           <span class="nav-icon">🚨</span> Leaked Creds
         </div>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">Web Security</div>
-        <div class="nav-item" onclick="scrollTo('sec-headers')">
+        <div class="nav-item" onclick="goToSection('sec-headers')">
           <span class="nav-icon">🛡</span> Security Headers
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-cors')">
+        <div class="nav-item" onclick="goToSection('sec-cors')">
           <span class="nav-icon">🔗</span> CORS Policy
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-waf')">
+        <div class="nav-item" onclick="goToSection('sec-waf')">
           <span class="nav-icon">🧱</span> WAF Detection
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-tech')">
+        <div class="nav-item" onclick="goToSection('sec-tech')">
           <span class="nav-icon">⚙</span> Technologies
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-email')">
+        <div class="nav-item" onclick="goToSection('sec-email')">
           <span class="nav-icon">✉</span> Email Security
         </div>
       </div>
       <div class="nav-group">
         <div class="nav-group-label">Intelligence</div>
-        <div class="nav-item" onclick="scrollTo('sec-shodan')">
+        <div class="nav-item" onclick="goToSection('sec-shodan')">
           <span class="nav-icon">👁</span> Shodan
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-vt')">
+        <div class="nav-item" onclick="goToSection('sec-vt')">
           <span class="nav-icon">🦠</span> VirusTotal
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-wayback')">
+        <div class="nav-item" onclick="goToSection('sec-wayback')">
           <span class="nav-icon">🕰</span> Wayback URLs
         </div>
-        <div class="nav-item" onclick="scrollTo('sec-whois')">
+        <div class="nav-item" onclick="goToSection('sec-whois')">
           <span class="nav-icon">📋</span> WHOIS
         </div>
       </div>
@@ -3817,6 +4350,44 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
   </div>
 
+  <!-- LIVE SUBDOMAINS (online + origin intel) -->
+  {% if report.live_subdomains %}
+  <div class="section" id="sec-live">
+    <div class="section-header" onclick="toggleSection('sec-live')">
+      <div class="section-header-left">
+        <div class="section-icon">🟢</div>
+        <h2>Live Subdomains (online + origin intel)</h2>
+      </div>
+      <div class="section-header-right">
+        <span class="count" style="color:var(--green)">{{ report.live_subdomains|length }} en línea</span>
+        <span class="arrow">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="body-sec-live">
+      <p style="font-size:12px;color:var(--text3);margin-bottom:10px">Subdominios que responden HTTP/HTTPS, con su IP real, título, server y pivotes de origen (favicon + LeakIX) para hunting de CDN bypass.</p>
+      <input class="filter-input" oninput="filterTable('liveTable', this.value)" placeholder="Filtrar subdominios vivos...">
+      <div class="scroll-wrap">
+        <table class="data-table" id="liveTable">
+          <thead><tr><th>Subdominio</th><th>Estado</th><th>IP</th><th>Server</th><th>Título</th><th>Favicon</th><th>LeakIX</th></tr></thead>
+          <tbody>
+          {% for s in report.live_subdomains %}
+            <tr>
+              <td><a href="{{ s.final_url }}" target="_blank" rel="noopener">{{ s.subdomain }}</a></td>
+              <td><span class="status-badge {% if s.status < 400 %}status-ok{% elif s.status < 500 %}status-warn{% else %}status-bad{% endif %}">{{ s.scheme|upper }} {{ s.status }}</span></td>
+              <td><code style="color:var(--accent2)">{{ s.ip or '—' }}</code></td>
+              <td style="font-size:11px">{{ s.server or '—' }}</td>
+              <td style="font-size:11px;color:var(--text2)">{{ s.title or '—' }}</td>
+              <td>{% if s.favicon_hash %}<code style="font-size:11px">{{ s.favicon_hash }}</code>{% else %}<span style="color:var(--text3)">—</span>{% endif %}</td>
+              <td style="font-size:11px;color:var(--text3)">{{ s.leakix or '—' }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="section-group-label">Attack Surface</div>
   <!-- SENSITIVE PATHS -->
   {% if report.sensitive_paths %}
@@ -4073,6 +4644,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
     </div>
     <div class="section-body" id="body-sec-shodan">
+      {% if report.shodan_info.is_cdn_edge %}
+      <p style="margin-bottom:12px;padding:10px;border-left:3px solid var(--yellow);background:rgba(255,200,0,.07);font-size:12px;color:var(--dim)">
+        ⚠ Esta IP es un <b>edge de CDN</b>, no el origen. Org, puertos y hostnames de abajo describen el CDN y a <b>otros inquilinos</b> que comparten la IP — no son del objetivo. Para el origen real, mira <b>Origin Candidates</b>.
+      </p>
+      {% endif %}
       <div class="scroll-wrap">
         <table class="data-table">
           <thead><tr><th>Field</th><th>Value</th><th>Security Note</th></tr></thead>
@@ -4162,7 +4738,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <table class="data-table" id="waybackTable">
           <thead><tr><th>URL</th><th>Type / Risk Signal</th></tr></thead>
           <tbody>
-            {% for u in report.wayback_urls %}
+            {% for u in report.wayback_urls[:400] %}
             {%- set url_lower = u|lower %}
             {%- set risk_label = '' %}
             {%- set risk_class = '' %}
@@ -4183,6 +4759,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           </tbody>
         </table>
       </div>
+      {% if report.wayback_urls|length > 400 %}<p class="table-note">Mostrando 400 de {{ report.wayback_urls|length }} URLs (filtrables arriba) — el set completo está en el JSON / Excel.</p>{% endif %}
     </div>
   </div>
   {% endif %}
@@ -4271,6 +4848,92 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   </div>
   {% endif %}
 
+  <!-- SUBDOMAIN DORKS (per live subdomain) -->
+  {% if report.subdomain_dorks %}
+  <div class="section" id="sec-subdorks">
+    <div class="section-header" onclick="toggleSection('sec-subdorks')">
+      <div class="section-header-left">
+        <div class="section-icon">🎯</div>
+        <h2>Subdomain Dorks (live hosts)</h2>
+      </div>
+      <div class="section-header-right">
+        <span class="count">{{ report.subdomain_dorks|length }} host(s)</span>
+        <span class="arrow">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="body-sec-subdorks">
+      <p style="font-size:12px;color:var(--text3);margin-bottom:12px">Cada subdominio <strong>vivo</strong> dorkeado con <code>site:&lt;sub&gt;</code> y un set curado (login/admin, config/env, backups, archivos, API, index-of). URLs de buscadores — <strong>nada se descarga</strong>.</p>
+      {% for sub, engines_d in report.subdomain_dorks.items() %}
+      <div class="subdork-host" style="margin-bottom:14px;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+        <div onclick="this.nextElementSibling.classList.toggle('hidden')" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg3);cursor:pointer;user-select:none">
+          <span style="width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0"></span>
+          <strong style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--accent)">{{ sub }}</strong>
+          {% set ns = namespace(n=0, files=0) %}
+          {% for engine, dresults in engines_d.items() %}{% for dork, hits in dresults.items() %}{% if hits is iterable and hits is not string %}{% for h in hits %}{% if h is mapping %}{% set ns.n = ns.n + 1 %}{% if h.is_file %}{% set ns.files = ns.files + 1 %}{% endif %}{% endif %}{% endfor %}{% endif %}{% endfor %}{% endfor %}
+          <span style="margin-left:auto;color:var(--text3);font-size:11px">{{ ns.n }} URLs · <span style="color:var(--yellow)">{{ ns.files }} files</span></span>
+        </div>
+        <div style="padding:6px 14px">
+          {% for engine, dresults in engines_d.items() %}
+            {% set en = namespace(c=0) %}
+            {% for dork, hits in dresults.items() %}{% if hits is iterable and hits is not string %}{% for h in hits %}{% if h is mapping %}{% set en.c = en.c + 1 %}{% endif %}{% endfor %}{% endif %}{% endfor %}
+            {% if en.c > 0 %}
+            <div style="margin:8px 0 3px;font-size:11px;color:var(--text3);font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:1px">{{ engine }}</div>
+            {% for dork, hits in dresults.items() %}
+              {% if not dork.startswith('_') and hits is iterable and hits is not string and hits|length > 0 %}
+                {% for h in hits %}{% if h is mapping %}
+                <div style="display:flex;align-items:center;gap:8px;padding:2px 0">
+                  {% if h.is_file %}<span style="background:var(--yellow);color:#000;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;flex-shrink:0">{{ h.file_type }}</span>{% else %}<span style="background:var(--bg4);color:var(--text3);font-size:9px;padding:1px 5px;border-radius:3px;flex-shrink:0">URL</span>{% endif %}
+                  <a href="{{ h.url }}" target="_blank" rel="noopener" style="color:{% if h.is_file %}var(--yellow){% else %}var(--accent2){% endif %};font-size:11.5px;word-break:break-all">{{ h.url }}</a>
+                </div>
+                {% endif %}{% endfor %}
+              {% endif %}
+            {% endfor %}
+            {% endif %}
+          {% endfor %}
+          {% if ns.n == 0 %}<div style="color:var(--text3);font-size:12px;font-style:italic;padding:4px 0">Sin resultados en los buscadores para este host.</div>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- SUBDOMAINS DISCOVERED VIA DORKS -->
+  {% if report.dork_discovered_subdomains %}
+  <div class="section" id="sec-dorksubs">
+    <div class="section-header" onclick="toggleSection('sec-dorksubs')">
+      <div class="section-header-left">
+        <div class="section-icon">🔭</div>
+        <h2>Subdomains Discovered via Dorks</h2>
+      </div>
+      <div class="section-header-right">
+        {% set newc = report.dork_discovered_subdomains|selectattr('new')|list|length %}
+        <span class="count" style="color:{% if newc %}var(--green){% else %}var(--dim){% endif %}">{{ report.dork_discovered_subdomains|length }} host(s){% if newc %} · {{ newc }} nuevos{% endif %}</span>
+        <span class="arrow">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="body-sec-dorksubs">
+      <p style="font-size:12px;color:var(--text3);margin-bottom:10px">Hostnames del objetivo extraídos de las URLs que arrojaron los dorks (buscadores). Los marcados <span style="color:var(--green)">NUEVO</span> no aparecían en crt.sh / HackerTarget / SecurityTrails / sondeo en vivo — superficie de ataque adicional.</p>
+      <input class="filter-input" oninput="filterTable('dorkSubTable', this.value)" placeholder="Filtrar...">
+      <div class="scroll-wrap">
+        <table class="data-table" id="dorkSubTable">
+          <thead><tr><th>Subdominio</th><th>Origen</th><th>URL de ejemplo</th></tr></thead>
+          <tbody>
+          {% for d in report.dork_discovered_subdomains %}
+            <tr>
+              <td><code style="color:{% if d.new %}var(--green){% else %}var(--accent2){% endif %}">{{ d.subdomain }}</code>
+                  {% if d.new %}<span class="status-badge status-ok" style="margin-left:6px">NUEVO</span>{% endif %}</td>
+              <td style="font-size:11px">{% if d.new %}dork{% else %}ya conocido{% endif %}</td>
+              <td><a href="{{ d.sample_url }}" target="_blank" rel="noopener" style="font-size:11px;word-break:break-all">{{ d.sample_url }}</a></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="section-group-label">Leaks &amp; Exposure</div>
   <!-- DATA LEAKS -->
   {% if report.leaks %}
@@ -4290,12 +4953,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <table class="data-table">
           <thead><tr><th>Leak Record</th></tr></thead>
           <tbody>
-            {% for l in report.leaks %}
+            {% for l in report.leaks[:150] %}
             <tr><td>{{ l }}</td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+      {% if report.leaks|length > 150 %}<p class="table-note">Mostrando 150 de {{ report.leaks|length }} registros — el dataset completo está en el JSON / Excel.</p>{% endif %}
     </div>
   </div>
   {% endif %}
@@ -4411,12 +5075,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </tbody>
       </table>
       {% if report.asn_info.prefixes %}
-      <h3 style="margin:1rem 0 .5rem;color:var(--blue)">IP Ranges (Attack Surface)</h3>
+      <div class="subhead">IP Ranges (Attack Surface) <span class="muted">— {{ report.asn_info.prefixes|length }} rango(s)</span></div>
+      {% if report.asn_info.prefixes|length > 250 %}
+      <p class="table-note" style="margin-bottom:8px">Este ASN anuncia {{ report.asn_info.prefixes|length }} rangos (típico de un CDN/cloud grande como Cloudflare). Mostrando los primeros 250 — el listado completo está en el JSON / Excel.</p>
+      {% endif %}
       <div class="scroll-wrap">
         <table class="data-table" id="prefixTable">
           <thead><tr><th>Prefix</th><th>Type</th><th>Name</th><th>Country</th><th>Shodan</th></tr></thead>
           <tbody>
-            {% for px in report.asn_info.prefixes %}
+            {% for px in report.asn_info.prefixes[:250] %}
             <tr>
               <td><code>{{ px.prefix }}</code></td>
               <td>{{ px.type }}</td>
@@ -4518,6 +5185,153 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </tbody>
       </table>
       <p style="margin-top:.8rem;font-size:11px;color:var(--dim)">💡 Servers sharing this favicon fingerprint may be additional assets of the same target (staging, admin panels, CDN origins).</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ORIGIN CANDIDATES (CDN bypass via favicon pivot) -->
+  {% if report.origin_candidates %}
+  {% set oc = report.origin_candidates %}
+  <div class="section" id="sec-origin">
+    <div class="section-header" onclick="toggleSection('sec-origin')">
+      <div class="section-header-left">
+        <div class="section-icon">🎯</div>
+        <h2>Origin Candidates (CDN bypass)</h2>
+      </div>
+      <div class="section-header-right">
+        <span class="count" style="color:{% if oc.origins %}var(--red){% else %}var(--dim){% endif %}">
+          {%- if oc.status == 'ok' %}{{ oc.origins|length }} candidate(s)
+          {%- elif oc.status == 'skipped' %}n/a
+          {%- else %}{{ oc.status }}{% endif %}</span>
+        <span class="arrow">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="body-sec-origin">
+      {% if oc.status == 'ok' and oc.origins %}
+      <p style="font-size:12px;color:var(--dim)">Hosts serving the same favicon directly (not through the CDN). Verify each before trusting — a shared icon is a lead, not proof.</p>
+      <div class="scroll-wrap">
+        <table class="data-table">
+          <thead><tr><th>IP</th><th>Port</th><th>ASN</th><th>Org</th><th>Hostnames</th></tr></thead>
+          <tbody>
+          {% for o in oc.origins %}
+            <tr>
+              <td><code style="color:var(--red)">{{ o.ip }}</code></td>
+              <td>{{ o.port }}</td>
+              <td>{{ o.asn }}</td>
+              <td>{{ o.org }}</td>
+              <td style="word-break:break-all">{{ (o.hostnames or [])|join(', ') }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if oc.cdn %}<p style="margin-top:.6rem;font-size:11px;color:var(--dim)">+ {{ oc.cdn|length }} coincidencia(s) descartada(s) como CDN/edge.</p>{% endif %}
+      {% elif oc.status == 'ok' %}
+      <p style="color:var(--dim)">El pivote corrió, pero ningún host no-CDN sirve este favicon en Shodan (origen no expuesto o no indexado).</p>
+      {% elif oc.status == 'skipped' %}
+      <p style="color:var(--dim)">Omitido — {{ oc.reason }}.</p>
+      {% else %}
+      <p style="color:var(--yellow)">Fuente no disponible — {{ oc.reason }}.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ORIGIN INTEL (multi-source: FOFA / Censys / LeakIX) -->
+  {% if report.origin_intel %}
+  {% set oi = report.origin_intel %}
+  <div class="section" id="sec-origin-intel">
+    <div class="section-header" onclick="toggleSection('sec-origin-intel')">
+      <div class="section-header-left">
+        <div class="section-icon">🛰️</div>
+        <h2>Origin Intel (FOFA · Censys · LeakIX)</h2>
+      </div>
+      <div class="section-header-right">
+        <span class="count" style="color:{% if oi.high_confidence %}var(--red){% elif oi.correlated %}var(--yellow){% else %}var(--dim){% endif %}">
+          {%- if oi.high_confidence %}{{ oi.high_confidence|length }} alta confianza
+          {%- elif oi.correlated %}{{ oi.correlated|length }} lead(s)
+          {%- else %}sin cruces{% endif %}</span>
+        <span class="arrow">▾</span>
+      </div>
+    </div>
+    <div class="section-body" id="body-sec-origin-intel">
+
+      <!-- Correlación: IP en ≥2 fuentes = origen alta confianza -->
+      {% if oi.correlated %}
+      <div class="subhead">Correlación de IPs origen</div>
+      <div class="scroll-wrap">
+        <table class="data-table">
+          <thead><tr><th>IP</th><th>Confianza</th><th>Fuentes</th></tr></thead>
+          <tbody>
+          {% for c in oi.correlated %}
+            <tr>
+              <td><code style="color:{% if c.sources|length >= 2 %}var(--red){% else %}var(--yellow){% endif %}">{{ c.ip }}</code></td>
+              <td>{% if c.sources|length >= 2 %}<span class="status-badge status-bad">ALTA ({{ c.sources|length }} fuentes)</span>{% else %}<span class="status-badge status-warn">media (1 fuente)</span>{% endif %}</td>
+              <td>{{ c.sources|join(', ') }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p style="margin:.4rem 0 1rem;font-size:11px;color:var(--dim)">Una IP no-CDN que aparece en ≥2 fuentes es origen de alta confianza. Verifica siempre antes de confiar.</p>
+      {% else %}
+      <p style="color:var(--dim)">Ninguna IP origen se cruzó entre fuentes (origen no expuesto, no indexado, o cuentas sin datos).</p>
+      {% endif %}
+
+      <!-- Desglose por fuente -->
+      <div class="subhead">Detalle por fuente</div>
+      <div class="scroll-wrap">
+        <table class="data-table">
+          <thead><tr><th>Fuente</th><th>Estado</th><th>Origen</th><th>CDN/edge</th><th>Nota</th></tr></thead>
+          <tbody>
+          {% for key in ['fofa', 'censys'] %}
+            {% set s = oi.sources[key] %}
+            {% if s %}
+            <tr>
+              <td><strong>{{ s.source }}</strong></td>
+              <td>{% if s.status == 'ok' %}<span class="status-badge status-ok">✓ ok</span>{% elif s.status == 'unavailable' %}<span class="status-badge status-warn">○ n/d</span>{% else %}<span class="status-badge status-bad">✗ error</span>{% endif %}</td>
+              <td><code style="color:var(--red)">{{ s.origins|length }}</code></td>
+              <td>{{ s.cdn|length }}</td>
+              <td style="font-size:11px;color:var(--dim)">{{ s.reason or (s.query or '')[:60] }}</td>
+            </tr>
+            {% endif %}
+          {% endfor %}
+          {% if oi.sources.leakix %}
+            {% for lk in oi.sources.leakix %}
+            <tr>
+              <td><strong>LeakIX</strong></td>
+              <td>{% if lk.status == 'ok' %}<span class="status-badge status-ok">✓ ok</span>{% elif lk.status == 'unavailable' %}<span class="status-badge status-warn">○ n/d</span>{% else %}<span class="status-badge status-bad">✗ error</span>{% endif %}</td>
+              <td colspan="2" style="font-size:11px">{{ lk.summary or '—' }}</td>
+              <td style="font-size:11px;color:var(--dim)">{{ lk.reason or lk.ip or '' }}</td>
+            </tr>
+            {% endfor %}
+          {% endif %}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- IPs origen detalladas por FOFA/Censys -->
+      {% for key in ['fofa', 'censys'] %}
+        {% set s = oi.sources[key] %}
+        {% if s and s.origins %}
+        <div class="subhead">{{ s.source }} <span class="muted">— {{ s.origins|length }} host(s) origen</span></div>
+        <div class="scroll-wrap">
+          <table class="data-table">
+            <thead><tr><th>IP</th><th>Puerto(s)</th><th>ASN</th><th>Org / Host</th></tr></thead>
+            <tbody>
+            {% for o in s.origins[:50] %}
+              <tr>
+                <td><code style="color:var(--red)">{{ o.ip }}</code></td>
+                <td>{{ o.port or (o.ports or [])|join(', ') }}</td>
+                <td>{{ o.asn }}</td>
+                <td style="word-break:break-all">{{ o.org or o.host or '' }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+      {% endfor %}
     </div>
   </div>
   {% endif %}
@@ -4905,29 +5719,45 @@ function filterTable(tableId, q) {
 }
 
 /* ── Chart defaults ── */
-Chart.defaults.color = '#7d8590';
-Chart.defaults.font.family = "'Share Tech Mono', monospace";
+Chart.defaults.color = '#8593a5';
+Chart.defaults.font.family = "'JetBrains Mono', monospace";
+
+/* Replace an empty chart canvas with a clean "sin datos" placeholder so a
+   partial scan never shows a blank box. */
+function chartEmpty(ctx, msg) {
+  if (!ctx) return;
+  const box = ctx.parentElement;
+  ctx.remove();
+  const d = document.createElement('div');
+  d.className = 'chart-empty';
+  d.innerHTML = '<span>∅</span>' + (msg || 'Sin datos — correr con --all');
+  box.appendChild(d);
+}
 
 /* Security Headers doughnut */
 const hdrsCtx = document.getElementById('hdrsChart');
 if (hdrsCtx) {
   const present = {{ headers_present }};
   const missing = {{ headers_missing }};
-  new Chart(hdrsCtx, {
-    type: 'doughnut',
-    data: {
-      labels: ['Present', 'Missing'],
-      datasets: [{ data: [present, missing], backgroundColor: ['rgba(0,255,136,.7)','rgba(255,68,68,.5)'], borderWidth: 0 }]
-    },
-    options: { plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }, cutout: '65%' }
-  });
+  if (present + missing === 0) {
+    chartEmpty(hdrsCtx, 'Sin datos de headers — correr con --all');
+  } else {
+    new Chart(hdrsCtx, {
+      type: 'doughnut',
+      data: {
+        labels: ['Present', 'Missing'],
+        datasets: [{ data: [present, missing], backgroundColor: ['rgba(0,217,163,.75)','rgba(244,63,94,.6)'], borderWidth: 0 }]
+      },
+      options: { plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }, cutout: '65%' }
+    });
+  }
 }
 
 /* Open ports bar */
 const portsCtx = document.getElementById('portsChart');
 if (portsCtx) {
   const portLabels  = [{% for p in report_ports %}"{{ p.port }}/{{ p.service }}",{% endfor %}];
-  const portColors  = [{% for p in report_ports %}"{{ 'rgba(255,68,68,.7)' if p.severity == 'HIGH' else 'rgba(0,180,255,.5)' }}",{% endfor %}];
+  const portColors  = [{% for p in report_ports %}"{{ 'rgba(244,63,94,.75)' if p.severity == 'HIGH' else 'rgba(59,130,246,.6)' }}",{% endfor %}];
   if (portLabels.length > 0) {
     new Chart(portsCtx, {
       type: 'bar',
@@ -4935,21 +5765,24 @@ if (portsCtx) {
       options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { ticks: { font: { size: 10 } } } } }
     });
   } else {
-    portsCtx.parentElement.innerHTML += '<p style="color:var(--dim);font-size:11px">No ports scanned</p>';
-    portsCtx.style.display='none';
+    chartEmpty(portsCtx, 'Sin puertos escaneados — correr con --all');
   }
 }
 
 /* Subdomain sources doughnut */
 const subCtx = document.getElementById('subChart');
 if (subCtx) {
+  const subData = [{{ report.crtsh_subdomains|length }}, {{ (report.hackertarget_subdomains or [])|length }}, {{ (report.securitytrails.data or [])|length if report.securitytrails and not report.securitytrails.error else 0 }}];
+  if (subData.reduce((a,b)=>a+b,0) === 0) {
+    chartEmpty(subCtx, 'Sin subdominios');
+  } else
   new Chart(subCtx, {
     type: 'doughnut',
     data: {
       labels: ['crt.sh', 'HackerTarget', 'SecurityTrails'],
       datasets: [{
-        data: [{{ report.crtsh_subdomains|length }}, {{ (report.hackertarget_subdomains or [])|length }}, {{ (report.securitytrails.data or [])|length if report.securitytrails and not report.securitytrails.error else 0 }}],
-        backgroundColor: ['rgba(0,255,136,.7)','rgba(0,180,255,.6)','rgba(255,215,0,.6)'],
+        data: subData,
+        backgroundColor: ['rgba(0,217,163,.75)','rgba(59,130,246,.6)','rgba(234,179,8,.6)'],
         borderWidth: 0,
       }]
     },
@@ -4972,7 +5805,7 @@ if (subCtx) {
     });
     navItems.forEach(ni => {
       const fn = ni.getAttribute('onclick') || '';
-      const m  = fn.match(/scrollTo\\('([^']+)'\\)/);
+      const m  = fn.match(/goToSection\\('([^']+)'\\)/);
       if (m) ni.classList.toggle('active', m[1] === active);
     });
   }
@@ -4989,10 +5822,16 @@ function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sideOverlay').classList.remove('open');
 }
-function scrollTo(id) {
+function goToSection(id) {
   const el = document.getElementById(id);
   const content = document.getElementById('mainContent');
-  if (el && content) content.scrollTo({ top: el.offsetTop - 16, behavior: 'smooth' });
+  if (el && content) {
+    // Position relative to the scroll container — robust regardless of offsetParent.
+    const top = el.getBoundingClientRect().top
+              - content.getBoundingClientRect().top
+              + content.scrollTop - 16;
+    content.scrollTo({ top: top, behavior: 'smooth' });
+  }
   closeSidebar();
 }
 
@@ -5162,6 +6001,25 @@ def generate_excel(report: Dict, risk: Dict, output_dir: Path) -> Optional[Path]
         # Remove default sheet
         if "Sheet" in wb.sheetnames:
             del wb["Sheet"]
+
+        # 0 · Summary (overview, kept as the first sheet)
+        oi0 = report.get("origin_intel") or {}
+        summary_rows = [
+            {"Field": "Domain",          "Value": report.get("domain","")},
+            {"Field": "Resolved IP",     "Value": report.get("ip","") or "no resuelve"},
+            {"Field": "Risk Score",      "Value": f"{risk.get('score','?')}/100 (Grade {risk.get('grade','?')})"},
+            {"Field": "Findings",        "Value": str(len(risk.get("findings") or []))},
+            {"Field": "Subdomains",      "Value": str(len(report.get("crtsh_subdomains") or []) + len(report.get("hackertarget_subdomains") or []))},
+            {"Field": "Live Subdomains", "Value": str(len(report.get("live_subdomains") or []))},
+            {"Field": "Open Ports",      "Value": str(len(report.get("open_ports") or []))},
+            {"Field": "Wayback URLs",    "Value": str(len(report.get("wayback_urls") or []))},
+            {"Field": "Data Leaks",      "Value": str(len(report.get("leaks") or []))},
+            {"Field": "Origin Candidates","Value": str(len((report.get("origin_candidates") or {}).get("origins") or []))},
+            {"Field": "High-conf Origins","Value": str(len(oi0.get("high_confidence") or []))},
+            {"Field": "Dork Subdomains", "Value": str(len(report.get("dork_discovered_subdomains") or []))},
+            {"Field": "Generated",       "Value": datetime.now().strftime("%Y-%m-%d %H:%M")},
+        ]
+        _sheet_from_list(wb, "Summary", summary_rows, default_headers=["Field","Value"])
 
         # 1 · Risk Findings
         risk_rows = [
@@ -5341,6 +6199,82 @@ def generate_excel(report: Dict, risk: Dict, output_dir: Path) -> Optional[Path]
                              [{"Field": k, "Value": _safe_str(v,1000)} for k, v in si.items() if k != "error"],
                              default_headers=["Field","Value"])
 
+        # 21 · Origin Candidates (favicon-hash pivot via Shodan)
+        oc = report.get("origin_candidates") or {}
+        if isinstance(oc, dict) and (oc.get("origins") or oc.get("cdn")):
+            oc_rows = [{"IP": o.get("ip",""), "Port": o.get("port",""), "ASN": o.get("asn",""),
+                        "Org": o.get("org",""), "Hostnames": ", ".join(o.get("hostnames") or []),
+                        "Class": "ORIGIN"} for o in (oc.get("origins") or [])]
+            oc_rows += [{"IP": o.get("ip",""), "Port": o.get("port",""), "ASN": o.get("asn",""),
+                         "Org": o.get("org",""), "Hostnames": ", ".join(o.get("hostnames") or []),
+                         "Class": "CDN/edge"} for o in (oc.get("cdn") or [])]
+            _sheet_from_list(wb, "Origin Candidates", oc_rows,
+                             default_headers=["IP","Port","ASN","Org","Hostnames","Class"])
+
+        # 22 · Origin Intel (FOFA / Censys / LeakIX correlation)
+        oi = report.get("origin_intel") or {}
+        if oi:
+            corr_rows = [{"IP": c.get("ip",""), "Confidence": c.get("confidence",""),
+                          "Sources": ", ".join(c.get("sources") or [])}
+                         for c in (oi.get("correlated") or [])]
+            _sheet_from_list(wb, "Origin Correlation", corr_rows,
+                             default_headers=["IP","Confidence","Sources"])
+            # per-source origin hosts (FOFA + Censys)
+            intel_rows = []
+            for key in ("fofa", "censys"):
+                s = (oi.get("sources") or {}).get(key) or {}
+                for o in (s.get("origins") or []):
+                    intel_rows.append({"Source": s.get("source", key), "IP": o.get("ip",""),
+                                       "Port": _safe_str(o.get("port") or ", ".join(str(p) for p in (o.get("ports") or []))),
+                                       "ASN": o.get("asn",""), "Org/Host": o.get("org") or o.get("host","")})
+            # LeakIX status per IP
+            for lk in ((oi.get("sources") or {}).get("leakix") or []):
+                intel_rows.append({"Source": "LeakIX", "IP": lk.get("ip",""),
+                                   "Port": lk.get("status",""), "ASN": "",
+                                   "Org/Host": lk.get("summary") or lk.get("reason","")})
+            _sheet_from_list(wb, "Origin Intel Sources", intel_rows,
+                             default_headers=["Source","IP","Port","ASN","Org/Host"])
+
+        # 23 · Live Subdomains (online + origin intel)
+        live_rows = [{"Subdomain": s.get("subdomain",""),
+                      "Scheme": s.get("scheme",""), "Status": s.get("status",""),
+                      "IP": s.get("ip",""), "Server": s.get("server",""),
+                      "Title": _safe_str(s.get("title",""), 120),
+                      "Favicon Hash": _safe_str(s.get("favicon_hash","")),
+                      "LeakIX": _safe_str(s.get("leakix",""), 120)}
+                     for s in (report.get("live_subdomains") or [])]
+        _sheet_from_list(wb, "Live Subdomains", live_rows,
+                         default_headers=["Subdomain","Scheme","Status","IP","Server","Title","Favicon Hash","LeakIX"])
+
+        # 24 · Subdomain Dorks (per live subdomain, site:<sub>)
+        sd_rows = []
+        for sub, engines_d in (report.get("subdomain_dorks") or {}).items():
+            for engine, dresults in (engines_d or {}).items():
+                for dork, hits in (dresults or {}).items():
+                    if not isinstance(hits, list):
+                        continue
+                    for h in hits:
+                        url = h.get("url","") if isinstance(h, dict) else str(h)
+                        ft  = h.get("file_type","") if isinstance(h, dict) else ""
+                        sd_rows.append({"Subdomain": sub, "Engine": engine,
+                                        "Dork": _safe_str(dork, 200),
+                                        "URL": _safe_str(url, 500), "File Type": ft})
+        _sheet_from_list(wb, "Subdomain Dorks", sd_rows,
+                         default_headers=["Subdomain","Engine","Dork","URL","File Type"])
+
+        # 25 · Subdomains discovered via dorks
+        dds_rows = [{"Subdomain": d.get("subdomain",""),
+                     "New": "YES" if d.get("new") else "no",
+                     "Sample URL": _safe_str(d.get("sample_url",""), 300)}
+                    for d in (report.get("dork_discovered_subdomains") or [])]
+        _sheet_from_list(wb, "Dork Subdomains", dds_rows,
+                         default_headers=["Subdomain","New","Sample URL"])
+
+        # Usability: add an autofilter to every data sheet so columns sort/filter
+        for ws in wb.worksheets:
+            if ws.max_row >= 1 and ws.max_column >= 1:
+                ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
+
         wb.save(out)
         return out
     except Exception as e:
@@ -5354,6 +6288,94 @@ def generate_json(report: Dict, risk: Dict, output_dir: Path) -> Path:
     payload = {"report": report, "risk": risk, "generated": datetime.now().isoformat()}
     out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     return out
+
+def analyze_live_subdomains(sub_records: List[Dict], cfg: Config,
+                            max_intel: int = 20) -> List[Dict]:
+    """
+    Of all discovered subdomains, find the ones that are actually ONLINE (answer
+    HTTP/HTTPS) and enrich each live host with the same origin-hunting intel used
+    for the apex: favicon hash (Shodan pivot) + LeakIX on its resolved IP.
+
+    Returns a list of dicts the HTML/Excel render directly. Never raises — a dead
+    host, a DNS failure or a slow API is a normal per-host skip, not a tool error.
+    """
+    import re as _re
+    # unique hostnames, apex first is handled by caller; here just dedupe
+    seen: Set[str] = set()
+    hosts: List[str] = []
+    for r in sub_records:
+        h = (r.get("subdomain") if isinstance(r, dict) else r) or ""
+        h = h.strip().lower().rstrip(".")
+        if h and h not in seen:
+            seen.add(h); hosts.append(h)
+
+    def probe(host: str) -> Optional[Dict]:
+        """Quick liveness probe — one shot per scheme, short timeout, no retry."""
+        for scheme in ("https", "http"):
+            try:
+                resp = requests.get(f"{scheme}://{host}", headers=rand_headers(),
+                                    timeout=6, verify=False, allow_redirects=True)
+            except Exception:
+                continue
+            title = ""
+            try:
+                # Decode bytes as the page's declared charset, else UTF-8 (most
+                # sites). Avoids requests' ISO-8859-1 default mangling (Perú→PerÃº)
+                # and chardet's bad guesses. Then unescape HTML entities (&amp;).
+                import html as _html
+                charset = ""
+                ctype = resp.headers.get("Content-Type", "")
+                cm = _re.search(r"charset=([\w-]+)", ctype, _re.I)
+                if cm:
+                    charset = cm.group(1)
+                raw = resp.content[:20000]
+                if not charset:
+                    hm = _re.search(rb'charset=["\']?([\w-]+)', raw, _re.I)
+                    charset = hm.group(1).decode("ascii", "ignore") if hm else "utf-8"
+                text = raw.decode(charset, errors="replace")
+                m = _re.search(r"<title[^>]*>(.*?)</title>", text, _re.I | _re.S)
+                if m:
+                    title = _html.unescape(_re.sub(r"\s+", " ", m.group(1)).strip())[:80]
+            except Exception:
+                pass
+            ip = ""
+            try:
+                ip = socket.gethostbyname(host)
+            except Exception:
+                pass
+            return {"subdomain": host, "alive": True, "scheme": scheme,
+                    "status": resp.status_code,
+                    "server": resp.headers.get("Server", "")[:40],
+                    "title": title, "ip": ip,
+                    "final_url": resp.url[:120]}
+        return None
+
+    console.print(f"[blue]  → Probing {len(hosts)} subdomain(s) for liveness...[/blue]")
+    live: List[Dict] = []
+    with ThreadPoolExecutor(max_workers=min(cfg.max_threads, 20)) as ex:
+        for r in ex.map(probe, hosts):
+            if r:
+                live.append(r)
+    live.sort(key=lambda d: d["subdomain"])
+    console.print(f"[green]  ✓ {len(live)} subdomain(s) live online[/green]")
+
+    # Enrich the live hosts (capped) with favicon-hash + LeakIX, like the apex.
+    enrich = live[:max_intel]
+    def intel(entry: Dict) -> Dict:
+        fav = get_favicon_hash(entry["subdomain"], cfg)
+        entry["favicon_hash"] = (fav or {}).get("hash")
+        if entry.get("ip") and cfg.leakix_key:
+            lk = leakix_host(entry["ip"], cfg)
+            entry["leakix"] = lk.get("summary") if lk.get("status") == "ok" else f"({lk.get('status')})"
+        else:
+            entry["leakix"] = ""
+        return entry
+    if enrich:
+        console.print(f"[blue]  → Origin intel on {len(enrich)} live host(s)...[/blue]")
+        with ThreadPoolExecutor(max_workers=min(cfg.max_threads, 8)) as ex:
+            list(ex.map(intel, enrich))
+    return live
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN ORCHESTRATOR
@@ -5378,9 +6400,10 @@ def analyze_domain(domain: str, dorks: List[str], cfg: Config, args: argparse.Na
         "sensitive_paths": [], "cors_findings": [],
         # Attack surface
         "open_ports": [], "cloud_buckets": [], "subdomain_takeover": [],
-        "github_leaks": [],
+        "github_leaks": [], "live_subdomains": [],
         # Dorks & leaks
-        "leaks": [], "dork_results": {},
+        "leaks": [], "dork_results": {}, "subdomain_dorks": {},
+        "dork_discovered_subdomains": [],
     }
 
     use_all = args.all
@@ -5411,20 +6434,97 @@ def analyze_domain(domain: str, dorks: List[str], cfg: Config, args: argparse.Na
         report["securitytrails"] = get_securitytrails_subdomains(domain, cfg)
 
         # Aggregate all unique subdomains for takeover check
+        all_sub_records = (
+            report["crtsh_subdomains"]
+            + report["hackertarget_subdomains"]
+            + report["securitytrails"].get("subdomains", [])
+        )
         all_subs: List[str] = list({
             s.get("subdomain", s) if isinstance(s, dict) else s
-            for s in (
-                report["crtsh_subdomains"]
-                + report["hackertarget_subdomains"]
-                + report["securitytrails"].get("subdomains", [])
-            )
+            for s in all_sub_records
         })
+
+        # Which subdomains are actually ONLINE — then run origin intel on each.
+        prog.update(t, description="Live subdomains + origin intel...")
+        report["live_subdomains"] = analyze_live_subdomains(
+            [{"subdomain": s} for s in all_subs], cfg)
 
         prog.update(t, description="Favicon hash (Shodan pivot)...")
         report["favicon"] = get_favicon_hash(domain, cfg)
 
         prog.update(t, description="Shodan...")
         report["shodan_info"] = get_shodan(report["ip"], cfg)
+        # Flag when the resolved IP is just a CDN edge: a host-lookup on it only
+        # describes the CDN (and lists unrelated tenants sharing the edge).
+        edge_asn = f"AS{report.get('asn_info', {}).get('asn', '')}"
+        edge_org = report.get("asn_info", {}).get("asn_name", "")
+        edge_is_cdn = _is_cdn({"asn": edge_asn, "org": edge_org}) or \
+                      "cdn" in (report.get("shodan_info", {}).get("tags") or [])
+        if isinstance(report.get("shodan_info"), dict):
+            report["shodan_info"]["is_cdn_edge"] = edge_is_cdn
+
+        prog.update(t, description="Origin candidates (pivot)...")
+        # Behind a CDN the real origin is hidden — pivot off the favicon hash to
+        # hunt hosts serving the same icon directly, split origin vs edge.
+        report["origin_candidates"] = {"status": "skipped",
+                                       "reason": "IP no es CDN o sin favicon/clave"}
+        fav_hash = (report.get("favicon") or {}).get("hash")
+        if edge_is_cdn and fav_hash is not None and cfg.shodan_key:
+            report["origin_candidates"] = shodan_search(f"http.favicon.hash:{fav_hash}", cfg)
+
+        # ── Multi-source origin intel (FOFA + Censys + LeakIX) ──────────────
+        # Pivot the same domain/favicon/cert across every source that has a key,
+        # then correlate: an IP that shows up as a non-CDN origin in ≥2 sources
+        # is a high-confidence real origin. Each call returns a uniform _src dict,
+        # so a missing key / quota / tier is an "unavailable" skip, never a crash.
+        prog.update(t, description="Origin intel (FOFA/Censys/LeakIX)...")
+        intel_sources: Dict[str, Dict] = {}
+
+        # FOFA — cert + domain, plus favicon-hash pivot (FOFA icon_hash is mmh3 too)
+        if cfg.fofa_email and cfg.fofa_key:
+            fquery = f'domain="{domain}" || cert="{domain}"'
+            if fav_hash is not None:
+                fquery = f'icon_hash="{fav_hash}" || ({fquery})'
+            intel_sources["fofa"] = fofa_search(fquery, cfg)
+
+        # Censys — cert CN pivot (its strongest signal for finding the origin)
+        if cfg.censys_token:
+            cquery = (f'host.services.tls.certificates.leaf_data.subject.common_name='
+                      f'"{domain}"')
+            intel_sources["censys"] = censys_search(cquery, cfg)
+
+        # LeakIX — host lookup on the resolved IP and on each origin candidate
+        if cfg.leakix_key or True:  # key optional; still useful anonymously
+            leak_targets = []
+            if report.get("ip"):
+                leak_targets.append(report["ip"])
+            for o in (report.get("origin_candidates", {}).get("origins") or [])[:3]:
+                if o.get("ip") and o["ip"] not in leak_targets:
+                    leak_targets.append(o["ip"])
+            intel_sources["leakix"] = [leakix_host(ip, cfg) for ip in leak_targets[:4]]
+
+        # Correlate origin IPs across Shodan-pivot + FOFA + Censys
+        ip_hits: Dict[str, Set[str]] = {}
+        def _tally(src_name: str, result: Dict) -> None:
+            for o in (result.get("origins") or []):
+                ip = o.get("ip")
+                if ip:
+                    ip_hits.setdefault(ip, set()).add(src_name)
+        _tally("shodan", report.get("origin_candidates", {}) if isinstance(report.get("origin_candidates"), dict) else {})
+        if "fofa" in intel_sources:
+            _tally("fofa", intel_sources["fofa"])
+        if "censys" in intel_sources:
+            _tally("censys", intel_sources["censys"])
+        correlated = sorted(
+            ({"ip": ip, "sources": sorted(srcs), "confidence": "alta" if len(srcs) >= 2 else "media"}
+             for ip, srcs in ip_hits.items()),
+            key=lambda r: (-len(r["sources"]), r["ip"]))
+
+        report["origin_intel"] = {
+            "sources": intel_sources,
+            "correlated": correlated,
+            "high_confidence": [c for c in correlated if len(c["sources"]) >= 2],
+        }
 
         prog.update(t, description="Netlas...")
         report["netlas_info"] = get_netlas(domain, cfg)
@@ -5489,16 +6589,81 @@ def analyze_domain(domain: str, dorks: List[str], cfg: Config, args: argparse.Na
             report["github_leaks"] = dork_github(domain, cfg)
 
         # ── Dork engines ──
+        engines_raw = args.engines.lower()
+        # Google last: it blocks scraping hardest, so try Bing/DDG/Brave/others first.
+        engines = [e.strip() for e in
+                   (["bing","ddg","brave","yahoo","yandex","google"] if engines_raw == "all" else engines_raw.split(","))]
         if dorks:
-            engines_raw = args.engines.lower()
-            engines = [e.strip() for e in
-                       (["google","bing","ddg","yahoo","yandex","brave"] if engines_raw == "all" else engines_raw.split(","))]
             prog.update(t, description=f"Dorking ({', '.join(engines)})...")
             report["dork_results"] = run_dork_engines(domain, dorks, cfg, engines, args)
+
+        # ── Dork the LIVE subdomains (site:<sub>) ──
+        if (use_all or getattr(args, "dork_subs", False)) and report.get("live_subdomains"):
+            prog.update(t, description="Dorking live subdomains...")
+            report["subdomain_dorks"] = dork_live_subdomains(
+                report["live_subdomains"], cfg, engines, args,
+                max_subs=getattr(args, "dork_subs_max", 10))
+
+        # ── Extract subdomains discovered inside the dork result URLs ──
+        report["dork_discovered_subdomains"] = extract_dork_subdomains(report, domain)
 
         prog.update(t, description="Done.")
 
     return report
+
+
+def extract_dork_subdomains(report: Dict, domain: str) -> List[Dict]:
+    """
+    Harvest hostnames of the target domain that appear in dork result URLs
+    (both the apex dork_results and the per-subdomain subdomain_dorks). This
+    turns dork output into new recon surface: subdomains the search engines
+    know about. Each entry is flagged 'new' if it wasn't already discovered via
+    crt.sh / HackerTarget / SecurityTrails / live probing.
+    """
+    from urllib.parse import urlparse
+    dom = domain.lower().lstrip(".")
+
+    # already-known hosts, to flag what's genuinely new
+    known: Set[str] = set()
+    for key in ("crtsh_subdomains", "hackertarget_subdomains"):
+        for s in (report.get(key) or []):
+            h = (s.get("subdomain") if isinstance(s, dict) else s) or ""
+            if h:
+                known.add(h.lower().rstrip("."))
+    st = report.get("securitytrails") or {}
+    for s in (st.get("data") or []):
+        if isinstance(s, dict) and s.get("subdomain"):
+            known.add(s["subdomain"].lower().rstrip("."))
+    for s in (report.get("live_subdomains") or []):
+        if s.get("subdomain"):
+            known.add(s["subdomain"].lower().rstrip("."))
+
+    def _urls_from(dres: Dict) -> List[str]:
+        out = []
+        for _dork, hits in (dres or {}).items():
+            if isinstance(hits, list):
+                for h in hits:
+                    out.append(h.get("url", "") if isinstance(h, dict) else str(h))
+        return out
+
+    urls: List[str] = []
+    for _engine, dres in (report.get("dork_results") or {}).items():
+        urls += _urls_from(dres)
+    for _sub, engines_d in (report.get("subdomain_dorks") or {}).items():
+        for _engine, dres in (engines_d or {}).items():
+            urls += _urls_from(dres)
+
+    found: Dict[str, Dict] = {}
+    for u in urls:
+        try:
+            net = urlparse(u).netloc.lower().split("@")[-1].split(":")[0]
+        except Exception:
+            continue
+        if net and (net == dom or net.endswith("." + dom)):
+            if net not in found:
+                found[net] = {"subdomain": net, "new": net not in known, "sample_url": u[:120]}
+    # new ones first, then alphabetical
+    return sorted(found.values(), key=lambda d: (not d["new"], d["subdomain"]))
 
 def main() -> None:
     print_banner()
@@ -5528,6 +6693,10 @@ def main() -> None:
         f"[bold]v4 Modules (optional key)[/bold]\n"
         f"  GitHub dork:    {'[green]✓[/green]' if cfg.github_token        else '[yellow]–  set GITHUB_TOKEN (rate limited without)[/yellow]'}\n"
         f"  IPInfo ASN:     {'[green]✓[/green]' if cfg.ipinfo_key          else '[dim]–  (fallback, Cymru DNS is primary)[/dim]'}\n\n"
+        f"[bold]CDN Bypass / Origin IP (new)[/bold]\n"
+        f"  FOFA:           {'[green]✓[/green]' if (cfg.fofa_email and cfg.fofa_key) else '[yellow]–  set FOFA_EMAIL + FOFA_KEY[/yellow]'}\n"
+        f"  Censys:         {'[green]✓[/green]' if cfg.censys_token        else '[yellow]–  set CENSYS_TOKEN[/yellow]'}\n"
+        f"  LeakIX:         {'[green]✓[/green]' if cfg.leakix_key          else '[yellow]–  set LEAKIX_API_KEY[/yellow]'}\n\n"
         f"  Proxy:          {cfg.proxy or '[dim]none[/dim]'}",
         title="[bold]TripRecon v3.0 — API Status[/bold]",
         border_style="green",
@@ -5574,10 +6743,21 @@ def main() -> None:
         excel_path = generate_excel(report, risk, out_dir)
         json_path  = generate_json(report, risk, out_dir)
 
+        # Export the live subdomains as a plain .txt — one host per line, ready to
+        # pipe into other tooling (the file the dork sweep was built from).
+        live_path = None
+        live = report.get("live_subdomains") or []
+        if live:
+            live_path = out_dir / f"triprecon_{domain}_live.txt"
+            live_path.write_text("\n".join(s.get("subdomain","") for s in live) + "\n",
+                                 encoding="utf-8")
+
         console.print(f"\n[bold green]Reports saved to ./{out_dir}/[/bold green]")
         console.print(f"  [blue]HTML:[/blue]  {html_path.name}")
         console.print(f"  [blue]Excel:[/blue] {excel_path.name if excel_path else 'failed'}")
         console.print(f"  [blue]JSON:[/blue]  {json_path.name}")
+        if live_path:
+            console.print(f"  [blue]Live:[/blue]  {live_path.name}  ({len(live)} host(s))")
 
 if __name__ == "__main__":
     main()
