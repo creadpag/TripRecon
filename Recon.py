@@ -3696,28 +3696,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     .header-score-preview .preview-score { font-size: 32px; }
   }
 
-  /* ── PRINT ───────────────────────────────────────────────────────────── */
-  @media print {
-    .sidebar, .topbar, .sidebar-overlay, .hamburger { display: none !important; }
-    .shell { display: block; }
-    .main  { display: block; }
-    .content { overflow: visible; }
-    .btn, .filter-input, .toolbar { display: none; }
-    .section-body.hidden { display: block !important; }
-    .impact-cell { display: table-cell !important; }
-    body { background: #fff; color: #111; }
-    .header, .section, .stat-card, .chart-box {
-      border-color: #ddd; background: #fff; box-shadow: none;
-    }
-    .data-table td { color: #111; border-color: #eee; }
-    .data-table th { background: #f5f5f5; color: #444; border-color: #ddd; }
-    .header-accent-bar { display: none; }
-    .score-A { color: #059669 !important; }
-    .score-F { color: #dc2626 !important; }
-    .status-ok  { background: #d1fae5 !important; color: #065f46 !important; }
-    .status-bad { background: #fee2e2 !important; color: #991b1b !important; }
-  }
-
   /* ── SHELL LAYOUT ─────────────────────────────────────────────────────── */
   html, body { height: 100%; overflow: hidden; }
   .shell {
@@ -3885,6 +3863,120 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     .main { height: 100vh; }
     .content { overflow-y: auto; }
     .wrapper { padding: 16px 14px 32px; }
+    .tb-search, .tb-search-count { display: none; }
+    .topbar { padding: 0 12px; }
+    .topbar-breadcrumb { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: block; }
+    .topbar-actions .btn:not(.primary), .topbar-actions .tb-chip { display: none; }
+  }
+
+  /* ── TOPBAR SEARCH ───────────────────────────────────────────────────── */
+  .tb-search { position: relative; flex: 1; max-width: 360px; margin-left: 18px; }
+  .tb-search input {
+    width: 100%; background: var(--bg3); border: 1px solid var(--border2);
+    border-radius: 7px; color: var(--text); padding: 7px 34px 7px 30px;
+    font: 12px 'JetBrains Mono', monospace; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .tb-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,217,163,.1); }
+  .tb-search input::placeholder { color: var(--text3); }
+  .tb-search .ico { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text3); font-size: 12px; pointer-events: none; }
+  .tb-search kbd {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font: 10px 'JetBrains Mono', monospace; color: var(--text3);
+    border: 1px solid var(--border2); border-radius: 4px; padding: 0 5px; background: var(--bg2);
+  }
+  .tb-search input:not(:placeholder-shown) ~ kbd { display: none; }
+  .tb-search-count { font: 11px 'JetBrains Mono', monospace; color: var(--text3); white-space: nowrap; }
+  .tb-search-count.none { color: var(--red); }
+  .search-miss { display: none !important; }
+  mark.hl { background: rgba(234,179,8,.35); color: inherit; border-radius: 2px; padding: 0 1px; }
+
+  /* ── DYNAMIC NAV ─────────────────────────────────────────────────────── */
+  .nav-item .nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border2); flex-shrink: 0; }
+  .nav-dot.critical { background: var(--critical); box-shadow: 0 0 6px rgba(244,63,94,.6); }
+  .nav-dot.high     { background: var(--high); }
+  .nav-dot.medium   { background: var(--medium); }
+  .nav-dot.ok       { background: var(--accent); }
+  .nav-item.search-dim { opacity: .35; }
+
+  /* ── CLICKABLE STAT CARDS ────────────────────────────────────────────── */
+  .stat-card[data-target] { cursor: pointer; }
+  .stat-card.no-data { opacity: .45; cursor: default; }
+  .stat-card.no-data:hover { transform: none; border-color: var(--border); box-shadow: none; }
+  .stat-card.no-data:hover::before { opacity: 0; }
+
+  /* ── FINDINGS SEVERITY FILTER ────────────────────────────────────────── */
+  .sev-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .sev-chip {
+    font: 600 10.5px 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: .6px;
+    padding: 5px 10px; border-radius: 999px; cursor: pointer;
+    background: var(--bg3); border: 1px solid var(--border2); color: var(--text2);
+  }
+  .sev-chip b { font-weight: 700; margin-left: 4px; color: var(--text); }
+  .sev-chip:hover { border-color: var(--text3); }
+  .sev-chip.active { background: rgba(0,217,163,.12); border-color: var(--accent); color: var(--accent); }
+  .sev-chip[data-sev="CRITICAL"].active { background: rgba(244,63,94,.12); border-color: var(--critical); color: var(--critical); }
+  .sev-chip[data-sev="HIGH"].active     { background: rgba(249,115,22,.12); border-color: var(--high); color: var(--high); }
+  .sev-chip[data-sev="MEDIUM"].active   { background: rgba(234,179,8,.12); border-color: var(--medium); color: var(--medium); }
+  .sev-chip[data-sev="LOW"].active      { background: rgba(59,130,246,.12); border-color: var(--low); color: var(--low); }
+
+  /* ── SECTION TOOLS (copy / CSV) ──────────────────────────────────────── */
+  .sec-tool {
+    font: 600 10px 'JetBrains Mono', monospace; letter-spacing: .4px;
+    padding: 3px 8px; border-radius: 5px; cursor: pointer;
+    background: transparent; border: 1px solid var(--border2); color: var(--text3);
+    transition: color .12s, border-color .12s;
+  }
+  .sec-tool:hover { color: var(--accent); border-color: rgba(0,217,163,.5); }
+  .data-table code.copyable { cursor: copy; }
+  .data-table code.copyable:hover { outline: 1px dashed rgba(0,217,163,.5); outline-offset: 2px; }
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 20px);
+    background: var(--bg4); border: 1px solid var(--accent); color: var(--text);
+    font: 12px 'JetBrains Mono', monospace; padding: 9px 16px; border-radius: 8px;
+    box-shadow: var(--shadow-md); opacity: 0; pointer-events: none;
+    transition: opacity .18s, transform .18s; z-index: 100;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .section-group-label.empty { display: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+  }
+
+  /* ── PRINT / PDF ─────────────────────────────────────────────────────────
+     Comes last so it overrides the fixed-height app shell; the light palette
+     is applied by redefining the theme tokens, so inline var() colours follow. */
+  @media print {
+    :root {
+      --bg: #fff; --bg2: #fff; --bg3: #f6f7f9; --bg4: #eef1f4;
+      --text: #111827; --text2: #374151; --text3: #6b7280;
+      --border: #d9dee5; --border2: #c5ccd6;
+      --accent: #047857; --green: #047857; --dim: #6b7280;
+      --shadow-sm: none; --shadow-md: none; --shadow-glow: none;
+    }
+    @page { margin: 12mm; }
+    html, body { height: auto !important; overflow: visible !important; background: #fff !important; color: #111827; }
+    .shell, .main, .content { display: block !important; height: auto !important; overflow: visible !important; }
+    .sidebar, .topbar, .sidebar-overlay, .hamburger, .header-matrix-canvas,
+    .btn, .filter-input, .toolbar, .sev-filter, .sec-tool, .toast, .section-header .arrow { display: none !important; }
+    .wrapper { max-width: none; padding: 0; }
+    .section-body.hidden, .hidden { display: block !important; }
+    .search-miss { display: revert !important; }
+    .scroll-wrap { max-height: none !important; overflow: visible !important; }
+    .section, .stat-card, .chart-box, .finding-item, .score-card { break-inside: avoid; box-shadow: none !important; }
+    .section { break-inside: auto; }
+    .section-header { break-after: avoid; }
+    .data-table tr { break-inside: avoid; }
+    .header, .section, .stat-card, .chart-box, .score-card, .finding-item, .header-score-preview { background: #fff !important; }
+    .section-header { background: var(--bg3) !important; }
+    .stats-grid { grid-template-columns: repeat(6, 1fr) !important; }
+    .header-accent-bar { display: none; }
+    a { color: #1d4ed8 !important; }
+    .status-ok  { background: #d1fae5 !important; color: #065f46 !important; }
+    .status-bad { background: #fee2e2 !important; color: #991b1b !important; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
 </style>
 </head>
@@ -3905,80 +3997,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         {{ report.domain }}
       </div>
     </div>
-    <nav class="sidebar-nav" id="sideNav">
-      <div class="nav-group">
-        <div class="nav-group-label">Overview</div>
-        <div class="nav-item" onclick="goToSection('sec-summary')">
-          <span class="nav-icon">⚡</span> Overview
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-exec')">
-          <span class="nav-icon">🎯</span> Risk Score
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-charts')">
-          <span class="nav-icon">📊</span> Charts
-        </div>
-      </div>
-      <div class="nav-group">
-        <div class="nav-group-label">DNS &amp; Network</div>
-        <div class="nav-item" onclick="goToSection('sec-dns')">
-          <span class="nav-icon">🌐</span> DNS Records
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-subs')">
-          <span class="nav-icon">🔀</span> Subdomains
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-ports')">
-          <span class="nav-icon">🔌</span> Open Ports
-        </div>
-      </div>
-      <div class="nav-group">
-        <div class="nav-group-label">Attack Surface</div>
-        <div class="nav-item" onclick="goToSection('sec-paths')">
-          <span class="nav-icon">📂</span> Sensitive Paths
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-js')">
-          <span class="nav-icon">📜</span> JS Analysis
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-dorks')">
-          <span class="nav-icon">🔍</span> Google Dorks
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-leaks')">
-          <span class="nav-icon">🚨</span> Leaked Creds
-        </div>
-      </div>
-      <div class="nav-group">
-        <div class="nav-group-label">Web Security</div>
-        <div class="nav-item" onclick="goToSection('sec-headers')">
-          <span class="nav-icon">🛡</span> Security Headers
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-cors')">
-          <span class="nav-icon">🔗</span> CORS Policy
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-waf')">
-          <span class="nav-icon">🧱</span> WAF Detection
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-tech')">
-          <span class="nav-icon">⚙</span> Technologies
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-email')">
-          <span class="nav-icon">✉</span> Email Security
-        </div>
-      </div>
-      <div class="nav-group">
-        <div class="nav-group-label">Intelligence</div>
-        <div class="nav-item" onclick="goToSection('sec-shodan')">
-          <span class="nav-icon">👁</span> Shodan
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-vt')">
-          <span class="nav-icon">🦠</span> VirusTotal
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-wayback')">
-          <span class="nav-icon">🕰</span> Wayback URLs
-        </div>
-        <div class="nav-item" onclick="goToSection('sec-whois')">
-          <span class="nav-icon">📋</span> WHOIS
-        </div>
-      </div>
-    </nav>
+    <!-- Built by JS from the sections actually present, so no link ever points at a missing section -->
+    <nav class="sidebar-nav" id="sideNav"></nav>
     <div class="sidebar-score">
       <div class="sidebar-score-num score-{{ risk.grade }}">{{ risk.score }}</div>
       <div class="sidebar-score-info">
@@ -4002,8 +4022,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <span class="topbar-sep">/</span>
         <span>{{ report.domain }}</span>
       </div>
+      <div class="tb-search">
+        <span class="ico">⌕</span>
+        <input id="globalSearch" type="search" placeholder="Buscar en todo el informe…" autocomplete="off" aria-label="Buscar en el informe">
+        <kbd>/</kbd>
+      </div>
+      <span class="tb-search-count" id="searchCount"></span>
       <div class="topbar-actions">
-        <span class="tb-chip">{{ scan_date }}</span>
+        <button class="btn" onclick="expandAll()" title="Expandir todo">▾ Expandir</button>
+        <button class="btn" onclick="collapseAll()" title="Contraer todo">▸ Contraer</button>
+        <span class="tb-chip date">{{ scan_date }}</span>
         {%- if risk.grade in ['A','B'] %}
         <span class="tb-chip green">Grade {{ risk.grade }} · {{ risk.score }}/100</span>
         {%- elif risk.grade == 'C' %}
@@ -4067,11 +4095,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- TOOLBAR -->
-  <div class="toolbar">
-    <button class="btn" onclick="expandAll()">▾ Expand All</button>
-    <button class="btn" onclick="collapseAll()">▸ Collapse All</button>
-  </div>
 
   <!-- STATS CARDS -->
   {%- set _sp200 = (report.sensitive_paths or [])|selectattr('status', 'equalto', 200)|list|length %}
@@ -4103,62 +4126,62 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   {%- set _subs_n   = report.crtsh_subdomains|length + (report.hackertarget_subdomains or [])|length %}
   {%- set _asn_val  = (report.asn_info or {}).get('asn','—') %}
   <div class="stats-grid">
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-subs">
       <span class="stat-icon">🔍</span>
       <div class="num">{{ _subs_n }}</div>
       <div class="stat-label">Subdomains</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-ports">
       <span class="stat-icon">🔌</span>
       <div class="num{{ ' danger' if _ports_n > 3 else '' }}">{{ _ports_n }}</div>
       <div class="stat-label">Open Ports</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-paths">
       <span class="stat-icon">🗂️</span>
       <div class="num{{ ' danger' if _sp200 > 0 else '' }}">{{ _sp200 }}</div>
       <div class="stat-label">Sensitive Paths</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-headers">
       <span class="stat-icon">🛡️</span>
       <div class="num{{ ' warn' if _hcount < 5 else '' }}">{{ _hcount }}/10</div>
       <div class="stat-label">Sec Headers</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-leaks">
       <span class="stat-icon">💧</span>
       <div class="num{{ ' danger' if _leaks_n > 0 else '' }}">{{ _leaks_n }}</div>
       <div class="stat-label">Leak Records</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-wayback">
       <span class="stat-icon">🕰️</span>
       <div class="num">{{ wb_count }}</div>
       <div class="stat-label">Wayback URLs</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-dorks">
       <span class="stat-icon">🔎</span>
       <div class="num{{ ' warn' if dork_total.n > 0 else '' }}">{{ dork_total.n }}</div>
       <div class="stat-label">Dork Hits{% if dork_total.files %} · {{ dork_total.files }} files{% endif %}</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-cors">
       <span class="stat-icon">🌐</span>
       <div class="num{{ ' danger' if _cors_n > 0 else '' }}">{{ _cors_n }}</div>
       <div class="stat-label">CORS Issues</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-takeover">
       <span class="stat-icon">⚡</span>
       <div class="num{{ ' danger' if _vuln_tko > 0 else '' }}">{{ _vuln_tko }}</div>
       <div class="stat-label">Takeover Vulns</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-js">
       <span class="stat-icon">📜</span>
       <div class="num{{ ' danger' if _js_secs|length > 0 else '' }}">{{ _js_secs|length }}</div>
       <div class="stat-label">JS Secrets</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-asn">
       <span class="stat-icon">🗺️</span>
       <div class="num dim">{{ 'AS' ~ _asn_val if _asn_val != '—' else '—' }}</div>
       <div class="stat-label">ASN</div>
     </div>
-    <div class="stat-card">
+    <div class="stat-card" data-target="sec-email">
       <span class="stat-icon">✉️</span>
       <div class="num{{ ' ok' if _dmarc_ok and _spf_ok else ' danger' }}">{{ '✓' if _dmarc_ok and _spf_ok else '✗' }}</div>
       <div class="stat-label">Email Auth</div>
@@ -4196,9 +4219,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
     <div>
       {% if risk.findings %}
+      <div class="sev-filter" id="sevFilter">
+        <button class="sev-chip active" data-sev="all">Todos<b>{{ risk.findings|length }}</b></button>
+        {%- for sv in ['CRITICAL','HIGH','MEDIUM','LOW','INFO'] %}
+        {%- set n = risk.findings|selectattr('severity','equalto',sv)|list|length %}
+        {%- if n %}<button class="sev-chip" data-sev="{{ sv }}">{{ sv|lower }}<b>{{ n }}</b></button>{% endif %}
+        {%- endfor %}
+      </div>
       <div class="findings-list">
         {% for f in risk.findings %}
-        <div class="finding-item {{ f.severity }}">
+        <div class="finding-item {{ f.severity }}" data-sev="{{ f.severity }}">
           <div class="finding-badge-col">
             <span class="sev-badge large badge-{{ f.severity }}">{{ f.severity }}</span>
           </div>
@@ -4223,14 +4253,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <thead><tr><th>Severity</th><th>Finding</th><th>Attack Vector</th><th>Recommendation</th></tr></thead>
         <tbody>
           {% for f in risk.findings %}
-          <tr>
+          <tr data-sev="{{ f.severity }}">
             <td><span class="badge-{{ f.severity }} sev-badge">{{ f.severity|upper }}</span></td>
             <td style="font-weight:500;color:var(--text)">{{ f.title }}</td>
             <td class="impact-cell"><span>{{ f.detail }}</span></td>
             <td class="rec-cell">
-              {%- if f.severity == 'critical' %}Immediate patch / takedown required
-              {%- elif f.severity == 'high' %}Fix within 7 days — exploitable in bug bounty chain
-              {%- elif f.severity == 'medium' %}Fix within 30 days — lower-impact but reportable
+              {%- if f.severity|lower == 'critical' %}Immediate patch / takedown required
+              {%- elif f.severity|lower == 'high' %}Fix within 7 days — exploitable in bug bounty chain
+              {%- elif f.severity|lower == 'medium' %}Fix within 30 days — lower-impact but reportable
               {%- else %}Best practice — include in security hardening report
               {%- endif %}
             </td>
@@ -5721,10 +5751,6 @@ function filterTable(tableId, q) {
   });
 }
 
-/* ── Chart defaults ── */
-Chart.defaults.color = '#8593a5';
-Chart.defaults.font.family = "'JetBrains Mono', monospace";
-
 /* Replace an empty chart canvas with a clean "sin datos" placeholder so a
    partial scan never shows a blank box. */
 function chartEmpty(ctx, msg) {
@@ -5736,6 +5762,14 @@ function chartEmpty(ctx, msg) {
   d.innerHTML = '<span>∅</span>' + (msg || 'Sin datos — correr con --all');
   box.appendChild(d);
 }
+
+/* ── Charts (Chart.js comes from a CDN — degrade cleanly when offline) ── */
+if (!window.Chart) {
+  ['hdrsChart', 'portsChart', 'subChart'].forEach(id =>
+    chartEmpty(document.getElementById(id), 'Gráficos no disponibles sin conexión'));
+} else {
+Chart.defaults.color = '#8593a5';
+Chart.defaults.font.family = "'JetBrains Mono', monospace";
 
 /* Security Headers doughnut */
 const hdrsCtx = document.getElementById('hdrsChart');
@@ -5793,27 +5827,235 @@ if (subCtx) {
   });
 }
 
+} /* end charts */
+
+/* ── sidebar nav: built from the sections that were actually rendered ── */
+const NAV_GROUPS = [
+  ['Resumen',              ['sec-summary', 'sec-exec', 'sec-charts']],
+  ['DNS y red',            ['sec-dns', 'sec-subs', 'sec-live', 'sec-ports', 'sec-asn', 'sec-whois', 'sec-favicon', 'sec-origin', 'sec-origin-intel']],
+  ['Superficie de ataque', ['sec-paths', 'sec-js', 'sec-wbparams', 'sec-takeover', 'sec-buckets', 'sec-cors', 'sec-dorks', 'sec-subdorks', 'sec-dorksubs']],
+  ['Seguridad web',        ['sec-headers', 'sec-waf', 'sec-tech', 'sec-email']],
+  ['Inteligencia y fugas', ['sec-shodan', 'sec-vt', 'sec-urlscan', 'sec-wayback', 'sec-leaks', 'sec-github']],
+];
+const SHORT = { 'sec-summary': 'Overview', 'sec-exec': 'Findings', 'sec-charts': 'Charts', 'sec-live': 'Live Subdomains',
+  'sec-origin-intel': 'Origin Intel', 'sec-origin': 'Origin Candidates', 'sec-wbparams': 'Wayback Params',
+  'sec-subdorks': 'Subdomain Dorks', 'sec-dorksubs': 'Dork Subdomains', 'sec-favicon': 'Favicon Hash',
+  'sec-email': 'Email Security', 'sec-asn': 'ASN / BGP', 'sec-whois': 'WHOIS', 'sec-waf': 'WAF / CDN',
+  'sec-cors': 'CORS', 'sec-buckets': 'Cloud Buckets', 'sec-github': 'GitHub Leaks', 'sec-js': 'JS Analysis' };
+
+/* Worst severity visible inside a section → coloured dot in the nav. */
+function sectionSeverity(sec) {
+  if (sec.querySelector('.badge-CRITICAL, .finding-item.CRITICAL')) return 'critical';
+  if (sec.querySelector('.badge-HIGH, .status-bad, .finding-item.HIGH')) return 'high';
+  if (sec.querySelector('.badge-MEDIUM, .status-warn')) return 'medium';
+  return '';
+}
+function sectionTitle(sec) {
+  if (SHORT[sec.id]) return SHORT[sec.id];
+  const h = sec.querySelector('h2');
+  return h ? h.textContent.trim() : sec.id.replace('sec-', '');
+}
+function sectionCount(sec) {
+  const c = sec.querySelector('.section-header .count');
+  if (!c) return '';
+  const m = c.textContent.match(/[0-9][0-9,.]*/);
+  return m ? m[0] : '';
+}
+
+(function buildNav() {
+  const nav = document.getElementById('sideNav');
+  const present = new Map();
+  document.querySelectorAll('.header[id], .section[id]').forEach(s => { if (!present.has(s.id)) present.set(s.id, s); });
+  const used = new Set();
+  const groups = NAV_GROUPS.map(([label, ids]) => [label, ids.filter(id => present.has(id))]);
+  const rest = [...present.keys()].filter(id => !NAV_GROUPS.some(g => g[1].includes(id)));
+  if (rest.length) groups.push(['Otros', rest]);
+  groups.forEach(([label, ids]) => {
+    if (!ids.length) return;
+    const g = document.createElement('div');
+    g.className = 'nav-group';
+    g.innerHTML = '<div class="nav-group-label"></div>';
+    g.firstChild.textContent = label;
+    ids.forEach(id => {
+      if (used.has(id)) return; used.add(id);
+      const sec = present.get(id);
+      const it = document.createElement('div');
+      it.className = 'nav-item'; it.dataset.target = id; it.tabIndex = 0;
+      const sev = sectionSeverity(sec), cnt = sectionCount(sec);
+      it.innerHTML = '<span class="nav-dot ' + sev + '"></span><span class="nav-label"></span>' + (cnt ? '<span class="nav-badge"></span>' : '');
+      it.querySelector('.nav-label').textContent = sectionTitle(sec);
+      if (cnt) it.querySelector('.nav-badge').textContent = cnt;
+      it.addEventListener('click', () => goToSection(id));
+      it.addEventListener('keydown', e => { if (e.key === 'Enter') goToSection(id); });
+      g.appendChild(it);
+    });
+    nav.appendChild(g);
+  });
+
+  /* Hide in-page group headings that ended up with no section under them. */
+  document.querySelectorAll('.section-group-label').forEach(lbl => {
+    let n = lbl.nextElementSibling, has = false;
+    while (n && !n.classList.contains('section-group-label')) { if (n.classList.contains('section')) { has = true; break; } n = n.nextElementSibling; }
+    lbl.classList.toggle('empty', !has);
+  });
+})();
+
 /* ── sidebar scroll spy ── */
 (function() {
-  const sections = document.querySelectorAll('.section[id], .header[id]');
-  const navItems = document.querySelectorAll('.nav-item');
   const content  = document.getElementById('mainContent');
-  if (!content || !sections.length) return;
-
+  const navItems = [...document.querySelectorAll('#sideNav .nav-item')];
+  if (!content || !navItems.length) return;
+  const secs = navItems.map(n => document.getElementById(n.dataset.target)).filter(Boolean);
+  let ticking = false;
   function updateActive() {
-    let active = null;
-    const scrollY = content.scrollTop;
-    sections.forEach(sec => {
-      if (sec.offsetTop - 80 <= scrollY) active = sec.id;
+    ticking = false;
+    if (window._navLock) return;  /* a click is smooth-scrolling to its target */
+    const top = content.getBoundingClientRect().top + 90;
+    let active = secs[0] && secs[0].id, best = -Infinity;
+    secs.forEach(s => {
+      const t = s.getBoundingClientRect().top;
+      if (s.offsetParent !== null && t <= top && t > best) { best = t; active = s.id; }
     });
-    navItems.forEach(ni => {
-      const fn = ni.getAttribute('onclick') || '';
-      const m  = fn.match(/goToSection\\('([^']+)'\\)/);
-      if (m) ni.classList.toggle('active', m[1] === active);
-    });
+    navItems.forEach(n => n.classList.toggle('active', n.dataset.target === active));
   }
-  content.addEventListener('scroll', updateActive, { passive: true });
+  content.addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(updateActive); } }, { passive: true });
+  content.addEventListener('scrollend', () => { window._navLock = null; });
+  window._spy = updateActive;
   updateActive();
+})();
+
+/* ── stat cards jump to their section (muted when that section has no data) ── */
+document.querySelectorAll('.stat-card[data-target]').forEach(card => {
+  const id = card.dataset.target;
+  if (!document.getElementById(id)) { card.classList.add('no-data'); card.title = 'Sin datos en este escaneo'; return; }
+  card.title = 'Ir a la sección';
+  card.addEventListener('click', () => goToSection(id, true));
+});
+
+/* ── findings severity filter ── */
+(function() {
+  const bar = document.getElementById('sevFilter');
+  if (!bar) return;
+  bar.addEventListener('click', e => {
+    const chip = e.target.closest('.sev-chip');
+    if (!chip) return;
+    bar.querySelectorAll('.sev-chip').forEach(c => c.classList.toggle('active', c === chip));
+    const sev = chip.dataset.sev;
+    document.querySelectorAll('#sec-exec [data-sev]:not(.sev-chip)').forEach(el => {
+      el.style.display = (sev === 'all' || el.dataset.sev === sev) ? '' : 'none';
+    });
+  });
+})();
+
+/* ── toast + clipboard ── */
+function toast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 1600);
+}
+function copyText(txt, label) {
+  const done = () => toast(label || 'Copiado');
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(txt).then(done, () => fallbackCopy(txt, done));
+  } else fallbackCopy(txt, done);
+}
+function fallbackCopy(txt, done) {
+  /* file:// is not a secure context, so the async clipboard API is often missing */
+  const ta = document.createElement('textarea');
+  ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); done(); } catch (e) { toast('No se pudo copiar'); }
+  ta.remove();
+}
+
+/* ── per-section tools: copy first column / export CSV of visible rows ── */
+function visibleRows(table) {
+  return [...table.querySelectorAll('tbody tr')].filter(r => r.style.display !== 'none' && !r.classList.contains('search-miss'));
+}
+function cellText(td) { return td.textContent.replace(/\\s+/g, ' ').trim(); }
+function tableToCSV(table) {
+  const q = v => '"' + v.replace(/"/g, '""') + '"';
+  const head = [...table.querySelectorAll('thead th')].map(th => q(cellText(th)));
+  const rows = visibleRows(table).map(r => [...r.cells].map(td => q(cellText(td))).join(','));
+  return (head.length ? [head.join(',')] : []).concat(rows).join('\\n');
+}
+function download(name, text) {
+  const blob = new Blob([String.fromCharCode(0xFEFF) + text], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const DOMAIN = document.querySelector('.sidebar-domain') ? document.querySelector('.sidebar-domain').lastChild.textContent.trim() : 'report';
+document.querySelectorAll('.section[id]').forEach(sec => {
+  const tables = sec.querySelectorAll('.section-body table.data-table');
+  const right  = sec.querySelector('.section-header-right');
+  if (!tables.length || !right || sec.id === 'sec-exec') return;
+  const mk = (label, title, fn) => {
+    const b = document.createElement('button');
+    b.className = 'sec-tool'; b.textContent = label; b.title = title;
+    b.addEventListener('click', e => { e.stopPropagation(); fn(); });
+    right.insertBefore(b, right.firstChild);
+    return b;
+  };
+  mk('CSV', 'Exportar filas visibles a CSV', () => {
+    const csv = [...tables].map(tableToCSV).join('\\n\\n');
+    download('triprecon_' + DOMAIN + '_' + sec.id.replace('sec-', '') + '.csv', csv);
+    toast('CSV descargado');
+  });
+  mk('Copiar', 'Copiar la primera columna (filas visibles)', () => {
+    const vals = [];
+    tables.forEach(t => visibleRows(t).forEach(r => { if (r.cells[0]) vals.push(cellText(r.cells[0])); }));
+    const uniq = [...new Set(vals.filter(Boolean))];
+    copyText(uniq.join('\\n'), uniq.length + ' valores copiados');
+  });
+});
+
+/* click any code value inside a table to copy it */
+document.querySelectorAll('.data-table td code').forEach(c => {
+  c.classList.add('copyable'); c.title = 'Clic para copiar';
+  c.addEventListener('click', e => { e.stopPropagation(); copyText(c.textContent.trim(), 'Copiado: ' + c.textContent.trim().slice(0, 40)); });
+});
+
+/* ── global search: filters every table row and list across the report ── */
+(function() {
+  const input = document.getElementById('globalSearch');
+  const count = document.getElementById('searchCount');
+  if (!input) return;
+  const units = [...document.querySelectorAll('.section[id] .section-body tbody tr, .section[id] .finding-item, .section[id] .dork-block, .section[id] .tag')];
+  const navItems = [...document.querySelectorAll('#sideNav .nav-item')];
+  let h;
+  function run() {
+    const q = input.value.trim().toLowerCase();
+    let hits = 0;
+    const secHits = new Map();
+    units.forEach(u => {
+      const ok = !q || u.textContent.toLowerCase().includes(q);
+      u.classList.toggle('search-miss', !ok);
+      if (ok && q) { hits++; const s = u.closest('.section[id]'); secHits.set(s.id, (secHits.get(s.id) || 0) + 1); }
+    });
+    document.querySelectorAll('.section[id]').forEach(sec => {
+      if (!q) { sec.classList.remove('search-miss'); return; }
+      const has = secHits.has(sec.id) || sec.querySelector('.section-header').textContent.toLowerCase().includes(q);
+      sec.classList.toggle('search-miss', !has);
+      if (has) {
+        const body = document.getElementById('body-' + sec.id);
+        if (body) { body.classList.remove('hidden'); sec.querySelector('.section-header').classList.remove('collapsed'); }
+      }
+    });
+    document.querySelectorAll('.section-group-label:not(.empty), .stats-grid, .header').forEach(el => el.classList.toggle('search-miss', !!q));
+    navItems.forEach(n => n.classList.toggle('search-dim', !!q && !secHits.has(n.dataset.target)));
+    count.textContent = q ? (hits ? hits + ' resultados' : 'Sin resultados') : '';
+    count.classList.toggle('none', !!q && !hits);
+  }
+  input.addEventListener('input', () => { clearTimeout(h); h = setTimeout(run, 120); });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') { input.value = ''; run(); input.blur(); } });
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && document.activeElement !== input && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
+      e.preventDefault(); input.focus(); input.select();
+    }
+  });
 })();
 
 /* ── sidebar toggle (mobile) ── */
@@ -5825,9 +6067,19 @@ function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sideOverlay').classList.remove('open');
 }
-function goToSection(id) {
+function goToSection(id, open) {
   const el = document.getElementById(id);
   const content = document.getElementById('mainContent');
+  if (el && open) {
+    const body = document.getElementById('body-' + id);
+    if (body && body.classList.contains('hidden')) toggleSection(id);
+  }
+  if (el) {
+    clearTimeout(window._navLockT);
+    window._navLock = id;
+    window._navLockT = setTimeout(() => { window._navLock = null; }, 1500);
+    document.querySelectorAll('#sideNav .nav-item').forEach(n => n.classList.toggle('active', n.dataset.target === id));
+  }
   if (el && content) {
     // Position relative to the scroll container — robust regardless of offsetParent.
     const top = el.getBoundingClientRect().top
@@ -5862,9 +6114,16 @@ function goToSection(id) {
       drops[i] = y > canvas.height / 14 + Math.random() * 20 ? 0 : y + 0.6;
     });
   }
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   resize();
   window.addEventListener('resize', resize);
-  setInterval(draw, 60);
+  let timer = null;
+  const start = () => { if (!timer) timer = setInterval(draw, 60); };
+  const stop  = () => { clearInterval(timer); timer = null; };
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(es => es[0].isIntersecting ? start() : stop()).observe(canvas);
+  } else start();
+  document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
 })();
 </script>
 </body>
