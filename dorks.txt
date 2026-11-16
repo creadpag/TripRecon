@@ -1,107 +1,123 @@
-site:{domain} filetype:pdf
-site:{domain} filetype:doc OR filetype:docx
-site:{domain} filetype:xls OR filetype:xlsx
-site:{domain} filetype:ppt OR filetype:pptx
-site:{domain} filetype:txt
-site:{domain} filetype:log
-site:{domain} filetype:conf
-site:{domain} filetype:bak
-site:{domain} filetype:jpg OR filetype:jpeg OR filetype:png OR filetype:gif
-site:{domain} filetype:xml
-site:{domain} filetype:csv
-site:{domain} filetype:zip
-site:{domain} filetype:rar
-site:{domain} filetype:sql
-site:{domain} filetype:php OR filetype:asp OR filetype:aspx OR filetype:js
-site:{domain} intitle:"index of"
-site:{domain} inurl:/uploads/
-site:{domain} filetype:ini
-site:{domain} filetype:pem OR filetype:cer OR filetype:crt
-site:{domain} filetype:ova OR filetype:ovf
-site:{domain} filetype:vsd OR filetype:vsdx
-site:{domain} filetype:java OR filetype:py OR filetype:cpp
-site:{domain} filetype:cfg OR filetype:config
-site:{domain} filetype:md OR filetype:rst
-site:{domain} filetype:psd OR filetype:ai
-site:{domain} -www -shop -share -ir -mfa
-site:{domain} ext:php inurl:?
-site:{domain} inurl:api | site:*/rest | site:*/v1 | site:*/v2 | site:*/v3
-site:{domain} ext:log | ext:txt | ext:conf | ext:cnf | ext:ini | ext:env | ext:sh | ext:bak | ext:backup | ext:swp | ext:old | ext:~ | ext:git | ext:svn | ext:htpasswd | ext:htaccess | ext:json
-inurl:conf | inurl:env | inurl:cgi | inurl:bin | inurl:etc | inurl:root | inurl:sql | inurl:backup | inurl:admin | inurl:php site:{domain}
-inurl:"error" | intitle:"exception" | intitle:"failure" | intitle:"server at" | inurl:exception | "database error" | "SQL syntax" | "undefined index" | "unhandled exception" | "stack trace" site:{domain}
-inurl:q= | inurl:s= | inurl:search= | inurl:query= | inurl:keyword= | inurl:lang= inurl:& site:{domain}
-inurl:url= | inurl:return= | inurl:next= | inurl:redirect= | inurl:redir= | inurl:r2= | inurl:page= inurl:& inurl:http site:{domain}
-inurl:id= | inurl:pid= | inurl:category= | inurl:cat= | inurl:action= | inurl:sid= | inurl:dir= inurl:& site:{domain}
-inurl:http | inurl:url= | inurl:path= | inurl:dest= | inurl:html= | inurl:data= | inurl:domain= | inurl:page= inurl:& site:{domain}
-inurl:include | inurl:dir | inurl:detail= | inurl:file= | inurl:folder= | inurl:inc= | inurl:locate= | inurl:doc= | inurl:conf= inurl:& site:{domain}
-inurl:cmd | inurl:exec= | inurl:query= | inurl:code= | inurl:do= | inurl:run= | inurl:read= | inurl:ping= inurl:& site:{domain}
-site:{domain} "choose file"
-inurl:apidocs | inurl:api-docs | inurl:swagger | inurl:api-explorer site:{domain}
-inurl:login | inurl:signin | intitle:login | intitle:signin | inurl:secure site:{domain}
-inurl:test | inurl:env | inurl:dev | inurl:staging | inurl:sandbox | inurl:debug | inurl:temp | inurl:internal | inurl:demo site:{domain}
-site:{domain} ext:txt | ext:pdf | ext:xml | ext:xls | ext:xlsx | ext:ppt | ext:pptx | ext:doc | ext:docx
-site:{domain} intext:"confidential" | intext:"Not for Public Release" | intext:"internal use only" | intext:"do not distribute"
-inurl:email= | inurl:phone= | inurl:password= | inurl:secret= inurl:& site:{domain}
-inurl:/content/usergenerated | inurl:/content/dam | inurl:/jcr:content | inurl:/libs/granite | inurl:/etc/clientlibs | inurl:/content/geometrixx | inurl:/bin/wcm | inurl:/crx/de site:{domain}
-site:openbugbounty.org inurl:reports intext:"{domain}"
-site:groups.google.com "{domain}"
-site:pastebin.com "{domain}"
-site:jsfiddle.net "{domain}"
-site:codebeautify.org "{domain}"
-site:codepen.io "{domain}"
-site:s3.amazonaws.com "{domain}"
-site:blob.core.windows.net "{domain}"
-site:googleapis.com "{domain}"
-site:drive.google.com "{domain}"
-site:dev.azure.com "{domain}"
-site:onedrive.live.com "{domain}"
-site:digitaloceanspaces.com "{domain}"
-site:sharepoint.com "{domain}"
-site:s3-external-1.amazonaws.com "{domain}"
-site:s3.dualstack.us-east-1.amazonaws.com "{domain}"
-site:dropbox.com/s "{domain}"
-site:box.com/s "{domain}"
-site:docs.google.com inurl:"/d/" "{domain}"
-site:jfrog.io "{domain}"
-site:firebaseio.com "{domain}"
-site:{domain} inurl:/wp-admin/admin-ajax.php
-site:{domain} intext:"Powered by" & intext:Drupal & inurl:user
-site:{domain} inurl:/joomla/login
-site:{domain} inurl:/security.txt "bounty"
-site:{domain} inurl:/server-status apache
-site:*.{domain}
-site:{domain} ("Index of /" | "Índice de /")
-site:{domain} ext:log | ext:txt | ext:conf | ext:cnf | ext:ini | ext:env | ext:sh | ext:bak | ext:backup | ext:swp | ext:old | ext:~ | ext:sql | ext:git | ext:svn | ext:htpasswd | ext:htaccess | ext:json | ext:yaml | ext:yml
-inurl:conf | inurl:env | inurl:cgi | inurl:bin | inurl:etc | inurl:root | inurl:sql | inurl:backup | inurl:admin | inurl:php site:{domain}
-inurl:"error" | intitle:"exception" | intitle:"failure" | intitle:"server at" | inurl:exception | "database error" | "SQL syntax" | "undefined index" | "unhandled exception" | "stack trace" site:{domain}
-site:{domain} inurl:login | inurl:signin | intitle:login | intitle:"iniciar sesión"
-inurl:test | inurl:dev | inurl:staging | inurl:sandbox | inurl:debug | inurl:internal | inurl:demo | inurl:beta | inurl:preprod site:{domain}
-site:{domain} "Seleccionar archivo"
-site:{domain} ext:txt | ext:pdf | ext:xml | ext:xls | ext:xlsx | ext:doc | ext:docx | ext:ppt | ext:pptx | ext:csv intext:"confidencial" | intext:"uso interno" | intext:"no distribuir"
-inurl:password | inurl:secret | inurl:key | inurl:token site:{domain}
-site:{domain} intitle:"phpinfo()" "PHP Version"
-site:pastebin.com "{domain}"
-site:s3.amazonaws.com "{domain}"
-site:blob.core.windows.net "{domain}"
-site:googleapis.com "{domain}"
-site:drive.google.com "{domain}"
-site:sharepoint.com "{domain}"
-site:dropbox.com/s "{domain}"
-site:box.com/s "{domain}"
-# Los siguientes dorks son específicos para archivos con información sensible PERO limitados al dominio
-site:{domain} filetype:env "DB_PASSWORD"
-site:{domain} filetype:env "AWS_SECRET_ACCESS_KEY"
-site:{domain} filetype:log "password"
-site:{domain} filetype:sql "password"
-site:{domain} filetype:json "api_key"
-site:{domain} filetype:bak "password"
-site:{domain} filetype:env "SECRET_KEY"
-site:{domain} filetype:env "API_KEY"
-site:{domain} filetype:env "DATABASE_URL"
-site:{domain} filetype:env "PASSWORD"
-site:{domain} filetype:env "TOKEN"
-site:{domain} filetype:yml "password"
-site:{domain} filetype:yaml "password"
-site:{domain} filetype:config "password"
-site:{domain} filetype:properties "password"
+# ============================================================================
+# TripRecon — Dork set 2026 (bug bounty)
+# Uso:  python3 recon.py -d <dominio> --dork dork.txt --engines bing
+# {domain} se reemplaza por el objetivo. Todo acotado a site:{domain} (scope).
+# Lineas que empiezan con # son comentarios (ignoradas).
+# ============================================================================
 
+# ── Login / Auth ────────────────────────────────────────────────────────────
+site:{domain} inurl:login OR inurl:signin OR inurl:admin OR inurl:portal
+site:{domain} inurl:dashboard OR inurl:account
+site:{domain} intitle:"login" OR intitle:"sign in"
+
+# ── Archivos sensibles ──────────────────────────────────────────────────────
+site:{domain} ext:pdf OR ext:doc OR ext:docx OR ext:xls OR ext:xlsx
+site:{domain} ext:ppt OR ext:pptx OR ext:csv OR ext:txt
+site:{domain} ext:log OR ext:xml
+site:{domain} intitle:"index of"
+
+# ── Backups y bases de datos ────────────────────────────────────────────────
+site:{domain} ext:zip OR ext:tar OR ext:gz OR ext:7z OR ext:rar
+site:{domain} ext:bak OR ext:old OR ext:backup OR ext:swp
+site:{domain} ext:sql OR ext:dump OR ext:db
+site:{domain} intitle:"index of" backup
+
+# ── Config y codigo fuente ──────────────────────────────────────────────────
+site:{domain} ext:env OR ext:conf OR ext:cfg OR ext:ini
+site:{domain} ext:yml OR ext:yaml
+site:{domain} ext:json inurl:config
+site:{domain} inurl:.git OR inurl:wp-config OR inurl:phpinfo
+
+# ── Claves y certificados ───────────────────────────────────────────────────
+site:{domain} ext:pem OR ext:key OR ext:crt OR ext:cer OR ext:pfx OR ext:p12
+site:{domain} intext:"BEGIN RSA PRIVATE KEY"
+site:{domain} intext:"BEGIN OPENSSH PRIVATE KEY"
+
+# ── API y endpoints ─────────────────────────────────────────────────────────
+site:{domain} inurl:api OR inurl:swagger OR inurl:graphql
+site:{domain} inurl:v1 OR inurl:v2 OR inurl:v3 OR inurl:rest
+site:{domain} filetype:wsdl
+
+# ── Almacenamiento en la nube ───────────────────────────────────────────────
+site:s3.amazonaws.com "{domain}"
+site:blob.core.windows.net "{domain}"
+site:storage.googleapis.com "{domain}"
+site:{domain} inurl:s3 OR inurl:bucket
+
+# ── Info expuesta / credenciales ────────────────────────────────────────────
+site:{domain} intext:"api_key" OR intext:"apikey" OR intext:"secret" OR intext:"token"
+site:{domain} intext:"DB_PASS" OR intext:"DB_USER" OR intext:"password"
+site:{domain} intext:"Warning: mysql_" OR intext:"ORA-" intext:"error"
+
+# ── Subdominios / infraestructura ───────────────────────────────────────────
+site:{domain} -www
+site:{domain} inurl:dev OR inurl:staging OR inurl:test OR inurl:internal
+site:{domain} inurl:vpn OR inurl:ssh
+site:{domain} inurl:jira OR inurl:confluence OR inurl:jenkins OR inurl:gitlab
+
+# ============================================================================
+# 2026 — Contenedores y orquestacion
+# ============================================================================
+site:{domain} inurl:"/v2/_catalog"
+site:{domain} inurl:"/v2/" intext:"repositories"
+site:{domain} intitle:"Kubernetes Dashboard" -intitle:"Login"
+site:{domain} ext:yaml intext:"kind: Config" intext:"clusters:"
+site:{domain} ext:yml intext:"docker-compose" OR intext:"services:"
+site:{domain} ext:env intext:"DOCKER_" OR intext:"REGISTRY_"
+site:{domain} inurl:".dockercfg" OR inurl:".dockerconfigjson"
+site:{domain} intitle:"index of" ".kube"
+site:{domain} inurl:"/metrics" intext:"go_gc"
+site:{domain} intitle:"Traefik" inurl:dashboard
+site:{domain} inurl:"8080/#/" intitle:"Rancher"
+site:{domain} inurl:"/api/v1/namespaces"
+
+# ============================================================================
+# 2026 — Plataformas de IA / LLM
+# ============================================================================
+site:{domain} intitle:"Jupyter Notebook" inurl:"/tree" -"Login"
+site:{domain} intitle:"MLflow"
+site:{domain} intitle:"Gradio" OR inurl:":7860"
+site:{domain} inurl:":8501" intitle:"Streamlit"
+site:{domain} intitle:"Open WebUI" OR intitle:"Ollama"
+site:{domain} intitle:"Qdrant Dashboard"
+site:{domain} intitle:"ComfyUI" OR intitle:"Stable Diffusion"
+site:{domain} intitle:"LiteLLM" OR inurl:"/v1/chat/completions"
+site:{domain} intitle:"Kubeflow" OR intitle:"Airflow"
+site:{domain} intitle:"Label Studio"
+site:{domain} inurl:"/v1/models" intext:"object"
+site:{domain} inurl:"/collections" intext:"vectors"
+
+# ============================================================================
+# 2026 — Secretos y config de IA
+# ============================================================================
+site:{domain} ext:env intext:"OPENAI_API_KEY"
+site:{domain} ext:env intext:"ANTHROPIC_API_KEY"
+site:{domain} ext:env intext:"HUGGINGFACE" OR intext:"HF_TOKEN"
+site:{domain} ext:env intext:"PINECONE_API_KEY" OR intext:"WEAVIATE"
+site:{domain} ext:env intext:"LANGCHAIN" OR intext:"LANGSMITH"
+site:{domain} ext:env intext:"GROQ_API_KEY" OR intext:"REPLICATE"
+site:{domain} ext:env intext:"WANDB_API_KEY"
+site:{domain} ext:ipynb intext:"api_key" OR intext:"sk-"
+site:{domain} ext:json intext:"mcpServers"
+site:{domain} inurl:".cursor" OR inurl:"windsurf" intext:"apiKey"
+
+# ============================================================================
+# 2026 — Fugas en conversaciones de IA (mencionando al objetivo)
+# ============================================================================
+site:chatgpt.com/share "{domain}"
+site:claude.ai/share "{domain}"
+site:perplexity.ai/search "{domain}"
+site:grok.com/share "{domain}"
+site:huggingface.co/spaces "{domain}"
+site:web.archive.org "claude.ai/share" "{domain}"
+
+# ============================================================================
+# 2026 — CI/CD y gestion de secretos
+# ============================================================================
+site:{domain} inurl:".github/workflows" OR inurl:".gitlab-ci.yml"
+site:{domain} ext:yml intext:"AWS_ACCESS_KEY" OR intext:"AWS_SECRET"
+site:{domain} inurl:".env.production" OR inurl:".env.local"
+site:{domain} ext:json intext:"private_key" intext:"client_email"
+site:{domain} inurl:".aws/credentials" OR inurl:".npmrc"
+site:{domain} intext:"xoxb-" OR intext:"xoxp-"
+site:{domain} intext:"ghp_" OR intext:"github_pat_"
