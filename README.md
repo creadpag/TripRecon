@@ -76,22 +76,54 @@ python-dotenv
 ## API Keys (`.env`)
 
 ```env
-# ── Required for full coverage ─────────────────────────────────────
-SHODAN_API_KEY=           # https://account.shodan.io
-VIRUSTOTAL_API_KEY=       # https://www.virustotal.com/gui/my-apikey
-URLSCAN_API_KEY=          # https://urlscan.io/user/signup
+# TripRecon — Plantilla de configuración (.env.example)
+#   1. Copiar:  cp .env.example .env
+#   2. Rellenar las keys que tengas (las vacías simplemente se omiten)
+#   3. NUNCA subir el .env real a git (añádelo a .gitignore)
+#
+# recon.py lee TODO desde aquí (load_dotenv). No hay ninguna API en el código.
+# ============================================================================
 
-# ── Recommended ────────────────────────────────────────────────────
-SECURITYTRAILS_API_KEY=   # https://securitytrails.com/app/account/credentials
-GITHUB_TOKEN=             # https://github.com/settings/tokens  (no scopes needed)
-NETLAS_API_KEY=           # https://app.netlas.io/profile/
+# ── Core OSINT ──────────────────────────────────────────────────────────────
+SHODAN_API_KEY=
+SECURITYTRAILS_API_KEY=
+VIRUSTOTAL_API_KEY=
+URLSCAN_API_KEY=
+NETLAS_API_KEY=
+HUNTERHOW_API_KEY=
+IPINFO_API_KEY=
 
-# ── Dorking (optional — use --sinapigoogle / --sinapibing for free) ─
-GOOGLE_API_KEY=           # console.cloud.google.com → Custom Search API
-GOOGLE_CSE_ID=            # programmablesearchengine.google.com
-BING_API_KEY=             # portal.azure.com → Bing Search v7
-BRAVE_API_KEY=            # api.search.brave.com
-HUNTERHOW_API_KEY=        # hunter.how
+# ── CDN bypass / Origin IP ──────────────────────────────────────────────────
+FOFA_EMAIL=
+FOFA_KEY=
+# Campos que FOFA puede devolver (gratis): ip,port,host,title
+FOFA_FIELDS=ip,port,host,title
+CENSYS_TOKEN=
+# CENSYS_API_SECRET=        # alternativa al token
+# CENSYS_ORG_ID=            # solo tiers de pago
+LEAKIX_API_KEY=
+
+# ── Motores de búsqueda (dorks) ─────────────────────────────────────────────
+# Bing NO necesita key: se scrapea con navegador real (--engines bing).
+# Google CSE: key + CX con "buscar en toda la web" activado.
+GOOGLE_API_KEY=
+GOOGLE_CSE_ID=
+BING_API_KEY=
+BRAVE_API_KEY=
+
+# ── Fugas en código ─────────────────────────────────────────────────────────
+GITHUB_TOKEN=             # scope recomendado: public_repo (solo lectura)
+
+# ── Red (opcional) ──────────────────────────────────────────────────────────
+# PROXY=http://127.0.0.1:8080
+
+# ── Rendimiento (opcional) ──────────────────────────────────────────────────
+MAX_THREADS=15
+REQUEST_TIMEOUT=15
+REQUEST_DELAY=1.5
+SCRAPE_DELAY_MIN=2.0
+SCRAPE_DELAY_MAX=5.0
+
 ```
 
 > **Note:** All API keys are optional. TripRecon skips modules gracefully when keys are absent and still runs full passive recon without any key.
